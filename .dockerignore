@@ -1,0 +1,17 @@
+# Build context exclusions
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+build
+dist
+*.egg-info
+data
+*.db
+*.db-*
+.DS_Store
+tests

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harmonie"
+version = "0.1.0"
+description = "Audio similarity service. Scans music libraries, extracts Essentia embeddings + descriptors, exposes an HTTP API for similarity queries and playlist generation."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.23",
+    "essentia-tensorflow",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "platformdirs>=4.0",
+    "tqdm>=4.65",
+    "mutagen>=1.47",
+]
+
+[project.optional-dependencies]
+classic = ["essentia"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+harmonie = "harmonie.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["harmonie*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

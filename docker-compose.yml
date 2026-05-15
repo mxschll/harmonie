@@ -1,0 +1,28 @@
+services:
+  harmonie:
+    build: .
+    image: harmonie:latest
+    container_name: harmonie
+    restart: unless-stopped
+    environment:
+      HARMONIE_LIBRARIES: /music
+      HARMONIE_DATA_DIR: /data
+      HARMONIE_BACKEND: effnet
+      HARMONIE_SCAN_INTERVAL_HOURS: 6
+      HARMONIE_SCAN_ON_STARTUP: "true"
+      HARMONIE_PORT: 8842
+      HARMONIE_LOG_LEVEL: INFO
+      # HARMONIE_API_KEY: change-me
+      # HARMONIE_WORKERS: 4
+    ports:
+      - "8842:8842"
+    volumes:
+      - ./data:/data
+      # Edit this to point at your music library. Read-only is fine.
+      - /path/to/music:/music:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8842/healthz', timeout=5).status == 200 else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
