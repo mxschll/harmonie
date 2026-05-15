@@ -199,7 +199,6 @@ def test_tags_and_library_columns_round_trip(
                 album="Record",
                 title="Song",
                 track_number=1,
-                musicbrainz_track_id="abc-123",
             ),
             library_root="/lib",
             relative_path="artist/album/01.flac",
@@ -209,7 +208,6 @@ def test_tags_and_library_columns_round_trip(
         assert row["album"] == "Record"
         assert row["title"] == "Song"
         assert row["track_number"] == 1
-        assert row["musicbrainz_track_id"] == "abc-123"
         assert row["library_root"] == "/lib"
         assert row["relative_path"] == "artist/album/01.flac"
     finally:

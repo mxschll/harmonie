@@ -68,7 +68,6 @@ CREATE TABLE IF NOT EXISTS tracks (
     album                 TEXT,
     title                 TEXT,
     track_number          INTEGER,
-    musicbrainz_track_id  TEXT,
     analyzed_at           REAL    NOT NULL
 );
 
@@ -79,7 +78,6 @@ CREATE INDEX IF NOT EXISTS idx_tracks_dance       ON tracks(danceability);
 CREATE INDEX IF NOT EXISTS idx_tracks_loud        ON tracks(loudness_db);
 CREATE INDEX IF NOT EXISTS idx_tracks_descv       ON tracks(descriptor_version);
 CREATE INDEX IF NOT EXISTS idx_tracks_lib         ON tracks(library_root);
-CREATE INDEX IF NOT EXISTS idx_tracks_mbid        ON tracks(musicbrainz_track_id);
 """
 
 
@@ -263,11 +261,11 @@ class Database:
                     descriptor_version,
                     bpm, bpm_confidence, key, scale, key_strength,
                     loudness_db, danceability, onset_rate,
-                    artist, album, title, track_number, musicbrainz_track_id,
+                    artist, album, title, track_number,
                     analyzed_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     library_root         = excluded.library_root,
                     relative_path        = excluded.relative_path,
@@ -290,7 +288,6 @@ class Database:
                     album                = excluded.album,
                     title                = excluded.title,
                     track_number         = excluded.track_number,
-                    musicbrainz_track_id = excluded.musicbrainz_track_id,
                     analyzed_at          = excluded.analyzed_at
                 """,
                 (
@@ -316,7 +313,6 @@ class Database:
                     t.album,
                     t.title,
                     t.track_number,
-                    t.musicbrainz_track_id,
                     time.time(),
                 ),
             )
@@ -348,7 +344,6 @@ class Database:
             "album              = ?",
             "title              = ?",
             "track_number       = ?",
-            "musicbrainz_track_id = ?",
             "analyzed_at        = ?",
         ]
         params: list = [
@@ -365,7 +360,6 @@ class Database:
             t.album,
             t.title,
             t.track_number,
-            t.musicbrainz_track_id,
             time.time(),
         ]
         if duration is not None:
@@ -454,7 +448,7 @@ class Database:
                    duration, model, embedding_dim, descriptor_version,
                    bpm, bpm_confidence, key, scale, key_strength,
                    loudness_db, danceability, onset_rate,
-                   artist, album, title, track_number, musicbrainz_track_id,
+                   artist, album, title, track_number,
                    size, mtime, analyzed_at
               FROM tracks WHERE id IN ({placeholders})
             """,
@@ -561,7 +555,7 @@ class Database:
                    size, mtime, duration, embedding_dim, model,
                    descriptor_version, bpm, bpm_confidence, key, scale,
                    key_strength, loudness_db, danceability, onset_rate,
-                   artist, album, title, track_number, musicbrainz_track_id,
+                   artist, album, title, track_number,
                    analyzed_at
               FROM tracks {where}
               ORDER BY {order_by}

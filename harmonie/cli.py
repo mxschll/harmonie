@@ -146,7 +146,6 @@ def cmd_info(args: argparse.Namespace) -> int:
             print(f"  Album:        {_fmt_opt(row.get('album'))}")
             print(f"  Title:        {_fmt_opt(row.get('title'))}")
             print(f"  Track #:      {_fmt_opt(row.get('track_number'))}")
-            print(f"  MBID:         {_fmt_opt(row.get('musicbrainz_track_id'))}")
         print(f"BPM:            {_fmt_opt(row['bpm'], '.1f')}"
               f"   confidence: {_fmt_opt(row.get('bpm_confidence'), '.2f')}")
         print(f"Key:            {key_disp}"

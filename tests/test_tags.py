@@ -68,7 +68,6 @@ def test_extract_tags_vorbis_style(monkeypatch):
             "album": ["Selected Ambient Works"],
             "title": ["Xtal"],
             "tracknumber": ["1/13"],
-            "musicbrainz_trackid": ["e3a06aa1-22f1-4d33-9eb9-5a13b48f12f1"],
         }
     )
     import mutagen
@@ -81,7 +80,6 @@ def test_extract_tags_vorbis_style(monkeypatch):
         album="Selected Ambient Works",
         title="Xtal",
         track_number=1,
-        musicbrainz_track_id="e3a06aa1-22f1-4d33-9eb9-5a13b48f12f1",
     )
 
 

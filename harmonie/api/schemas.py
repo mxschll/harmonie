@@ -26,7 +26,6 @@ class TrackSummary(BaseModel):
     album: Optional[str] = None
     title: Optional[str] = None
     track_number: Optional[int] = None
-    musicbrainz_track_id: Optional[str] = None
     # Musical descriptors.
     bpm: Optional[float] = None
     key: Optional[str] = None
@@ -91,7 +90,6 @@ class MatchOut(BaseModel):
     album: Optional[str] = None
     title: Optional[str] = None
     track_number: Optional[int] = None
-    musicbrainz_track_id: Optional[str] = None
 
 
 class SimilarResult(BaseModel):

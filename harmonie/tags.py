@@ -3,8 +3,7 @@
 Tags are not "features" in the Essentia sense — they're file metadata set by
 the user (or their tagger). We read them so external clients can match
 harmonie tracks back to their own catalog without doing a full filesystem
-walk: a MusicBrainz track id is a perfect match, and artist/album/title is
-good enough for the long tail.
+walk: artist + album + title + track number is good enough for the long tail.
 
 The extractor is defensive: any failure inside mutagen returns an empty
 :class:`Tags`. Tag extraction must never abort a scan.
@@ -28,7 +27,6 @@ class Tags:
     album: Optional[str] = None
     title: Optional[str] = None
     track_number: Optional[int] = None
-    musicbrainz_track_id: Optional[str] = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -131,20 +129,10 @@ def extract_tags(path: Path) -> Tags:
     album_raw = _first_value(tag_obj, ("album", "TALB"))
     title_raw = _first_value(tag_obj, ("title", "TIT2"))
     tn_raw = _first_value(tag_obj, ("tracknumber", "TRCK", "trkn"))
-    mbid_raw = _first_value(
-        tag_obj,
-        (
-            "musicbrainz_trackid",
-            "musicbrainz_track_id",
-            "MUSICBRAINZ_TRACKID",
-            "----:com.apple.iTunes:MusicBrainz Track Id",
-        ),
-    )
 
     return Tags(
         artist=_coerce_string(artist_raw),
         album=_coerce_string(album_raw),
         title=_coerce_string(title_raw),
         track_number=_parse_track_number(tn_raw),
-        musicbrainz_track_id=_coerce_string(mbid_raw),
     )

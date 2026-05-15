@@ -1,6 +1,6 @@
 # harmonie
 
-Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate) and reads the file's tags (artist, album, title, MusicBrainz id, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/), stores everything in SQLite, and exposes an HTTP API for similarity queries and playlist generation.
+Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate) and reads the file's tags (artist, album, title, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/), stores everything in SQLite, and exposes an HTTP API for similarity queries and playlist generation.
 
 The default backend is Essentia's **Discogs-Effnet** model — a 1280-d embedding trained on Discogs tags that's well suited to music similarity. A lighter `MusicExtractor` backend is available for hosts without TensorFlow.
 
@@ -82,8 +82,7 @@ OpenAPI docs are served at `/docs` (Swagger UI) and `/openapi.json`.
 
 Every track and every match in API responses includes the metadata you need to look it up in another system without doing a filesystem walk.
 
-* **`musicbrainz_track_id`** — when present, the canonical match. `harmonie` reads it from ID3 (UFID / `musicbrainz_trackid`), Vorbis comments (`musicbrainz_trackid`), and MP4 (`----:com.apple.iTunes:MusicBrainz Track Id`).
-* **`artist` + `album` + `title` + `track_number`** — the long-tail match for files without an MBID.
+* **`artist` + `album` + `title` + `track_number`** — the tag-based match. The four fields together are usually enough to identify a track unambiguously in another catalog.
 * **`library_root` + `relative_path`** — the path-based match. If the consumer sees the same library layout under a different mount point, it joins on `relative_path` directly. No path-prefix mapping config needed in the common case.
 
 `library_root` reflects the configured `HARMONIE_LIBRARIES` entries at scan time. If you reconfigure mount points, re-scan to refresh.
@@ -143,7 +142,7 @@ All settings come from environment variables (or a `.env` file in the working di
 1. **Scan.** `harmonie.scan` walks the configured roots and yields audio files (FLAC, MP3, WAV, OGG, M4A, AAC, AIFF, OPUS, WMA, ALAC).
 2. **Schedule.** A coroutine triggers `analyzer.scan()` on startup and every `HARMONIE_SCAN_INTERVAL_HOURS`. A second `POST /api/v1/scan` while one is running is a no-op.
 3. **Workers.** Files go through a `multiprocessing.Pool` of N processes. Each worker loads the model once at startup and reuses it. Two job types: full extraction (embedding + descriptors) and descriptor-only (top-up an existing row when only the descriptor pipeline changed).
-4. **Extract.** Each file is decoded once at 44.1 kHz mono. `RhythmExtractor2013`, `KeyExtractor`, `ReplayGain`, `Danceability`, and `OnsetRate` give the descriptor block. The same audio is resampled in memory to 16 kHz for `TensorflowPredictEffnetDiscogs`, whose 1280-d penultimate-layer outputs are averaged across windows. **Tags** (artist, album, title, track number, MusicBrainz track id) are read in parallel via `mutagen`.
+4. **Extract.** Each file is decoded once at 44.1 kHz mono. `RhythmExtractor2013`, `KeyExtractor`, `ReplayGain`, `Danceability`, and `OnsetRate` give the descriptor block. The same audio is resampled in memory to 16 kHz for `TensorflowPredictEffnetDiscogs`, whose 1280-d penultimate-layer outputs are averaged across windows. **Tags** (artist, album, title, track number) are read in parallel via `mutagen`.
 5. **Store.** SQLite (WAL mode) keeps one row per track: path, `library_root` + `relative_path`, size+mtime for change detection, embedding blob, descriptor columns, tag columns, `model` and `descriptor_version` for cheap top-ups. Filter columns are indexed.
 6. **Search.** Similarity queries hit an in-memory L2-normalised matrix kept by `EmbeddingIndex` (rebuilt lazily after each scan). A query is a single matrix-vector multiply; optional descriptor filters gate candidates before ranking.
 7. **Prune.** Files that disappeared between scans are dropped from the DB. The prune is scoped to roots that were actually reachable, so a temporarily-offline mount won't wipe the index.

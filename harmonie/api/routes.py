@@ -106,7 +106,6 @@ def _row_to_summary(row: dict) -> TrackSummary:
         album=row.get("album"),
         title=row.get("title"),
         track_number=row.get("track_number"),
-        musicbrainz_track_id=row.get("musicbrainz_track_id"),
         bpm=row.get("bpm"),
         key=row.get("key"),
         scale=row.get("scale"),
@@ -136,7 +135,6 @@ def _enrich_matches(db: Database, matches) -> list[MatchOut]:
                 album=row.get("album"),
                 title=row.get("title"),
                 track_number=row.get("track_number"),
-                musicbrainz_track_id=row.get("musicbrainz_track_id"),
             )
         )
     return out
