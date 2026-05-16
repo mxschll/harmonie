@@ -24,7 +24,10 @@ The fastest install on any host with Python 3.9+ is via [pipx][pipx], which puts
 
 ```bash
 # One-time: install pipx itself.
-brew install pipx        # macOS; or "python3 -m pip install --user pipx" elsewhere
+sudo apt install pipx           # Debian/Ubuntu
+# sudo dnf install pipx         # Fedora
+# brew install pipx             # macOS
+# python3 -m pip install --user pipx   # any other distro
 pipx ensurepath
 
 # Install harmonie from GitHub. --pre is required because essentia-tensorflow
