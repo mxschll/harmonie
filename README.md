@@ -41,25 +41,24 @@ Update with one command:
 pipx upgrade harmonie
 ```
 
-To pin a specific tag or commit:
+### First scan
+
+On first start, harmonie scans your library. Effnet inference is about a second per track on a fast core, longer on slow CPUs or network mounts. Large libraries on slow disks can take a day.
+
+Watch progress:
 
 ```bash
-pipx install --pip-args='--pre' 'git+https://github.com/mxschll/harmonie.git@v0.1.5'
-pipx install --pip-args='--pre' 'git+https://github.com/mxschll/harmonie.git@a1b2c3d'
+curl http://localhost:8842/api/v1/scan
 ```
 
-If you'd rather manage the venv yourself:
+Trigger a scan against a running service, or run one off from the CLI:
 
 ```bash
-python3 -m venv ~/.harmonie
-~/.harmonie/bin/pip install --pre 'git+https://github.com/mxschll/harmonie.git'
-~/.harmonie/bin/harmonie serve
-
-# update
-~/.harmonie/bin/pip install --pre --upgrade 'git+https://github.com/mxschll/harmonie.git'
+curl -X POST http://localhost:8842/api/v1/scan
+harmonie scan
 ```
 
-This is the recommended path on arm64 hosts (Apple Silicon, Pi, Graviton). Essentia ships native arm64 wheels; no Rosetta or qemu emulation.
+Subsequent scans are incremental. Only files whose size or mtime changed get re-extracted.
 
 [pipx]: https://pipx.pypa.io/
 
