@@ -13,6 +13,26 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
+def _default_data_dir() -> Path:
+    """Default location for ``harmonie.db`` and runtime state.
+
+    Resolves to the platform's user-data directory:
+
+    * Linux: ``$XDG_DATA_HOME/harmonie`` (typically ``~/.local/share/harmonie``)
+    * macOS: ``~/Library/Application Support/harmonie``
+    * Windows: ``%LOCALAPPDATA%\\harmonie``
+
+    Falls back to ``~/.local/share/harmonie`` if ``platformdirs`` is unavailable
+    (it's a hard dep, but the fallback keeps tests robust).
+    """
+    try:
+        from platformdirs import user_data_dir
+
+        return Path(user_data_dir("harmonie", appauthor=False))
+    except Exception:  # pragma: no cover - platformdirs is a hard dep
+        return Path.home() / ".local" / "share" / "harmonie"
+
+
 class Settings(BaseSettings):
     """Service configuration. Each field maps to a HARMONIE_* env var."""
 
@@ -30,8 +50,12 @@ class Settings(BaseSettings):
         description="Absolute paths to scan for audio files.",
     )
     data_dir: Path = Field(
-        default=Path("./data"),
-        description="Where to store the SQLite database and runtime state.",
+        default_factory=_default_data_dir,
+        description=(
+            "Where to store the SQLite database and runtime state. Defaults "
+            "to the platform user-data directory (~/.local/share/harmonie on "
+            "Linux, ~/Library/Application Support/harmonie on macOS)."
+        ),
     )
     db_filename: str = Field(default="harmonie.db")
 

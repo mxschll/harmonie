@@ -394,7 +394,7 @@ All settings come from environment variables (or a `.env` file in the working di
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HARMONIE_LIBRARIES` | (none) | Comma- or colon-separated absolute paths to scan |
-| `HARMONIE_DATA_DIR` | `./data` | Where to put `harmonie.db` |
+| `HARMONIE_DATA_DIR` | platform user-data dir | Where to put `harmonie.db`. Defaults to `~/.local/share/harmonie` on Linux, `~/Library/Application Support/harmonie` on macOS. |
 | `HARMONIE_BACKEND` | `effnet` | `effnet` or `musicextractor` |
 | `HARMONIE_WORKERS` | CPU count | Analysis worker processes |
 | `HARMONIE_SCAN_INTERVAL_HOURS` | `6` | Periodic scan interval (`0` disables) |
