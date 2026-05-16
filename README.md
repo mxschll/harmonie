@@ -51,11 +51,10 @@ Watch progress:
 curl http://localhost:8842/api/v1/scan
 ```
 
-Trigger a scan against a running service, or run one off from the CLI:
+Trigger another scan:
 
 ```bash
 curl -X POST http://localhost:8842/api/v1/scan
-harmonie scan
 ```
 
 Subsequent scans are incremental. Only files whose size or mtime changed get re-extracted.
