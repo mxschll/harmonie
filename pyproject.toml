@@ -1,10 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "harmonie"
-version = "0.1.0"
+# Version is derived from git via setuptools-scm — see [tool.setuptools_scm]
+# below. Each commit on main produces a unique version string like
+# 0.0.post47+g2122e65, so `pipx upgrade harmonie` actually upgrades.
+dynamic = ["version"]
 description = "Audio similarity service. Scans music libraries, extracts Essentia embeddings + descriptors, exposes an HTTP API for similarity queries and playlist generation."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -38,6 +41,14 @@ harmonie = "harmonie.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["harmonie*"]
+
+[tool.setuptools_scm]
+# Write the resolved version into the package at build time so the runtime
+# can read it without re-querying git (which isn't available in a wheel).
+version_file = "harmonie/_version.py"
+# When installed outside a git checkout (e.g. from an sdist that didn't
+# include git history), fall back to this rather than failing the build.
+fallback_version = "0.0.0+unknown"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
