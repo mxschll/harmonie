@@ -12,17 +12,106 @@ The intended deployment is a long-running container that periodically rescans th
 
 ## Quick start (Docker)
 
-A `linux/amd64` image is published to GitHub Container Registry on every push to `main` and on each version tag:
+A `linux/amd64` image is published to GitHub Container Registry on every push to `main` and on each version tag.
+
+### One-liner
+
+Edit the two paths and run:
 
 ```bash
-# x86_64 hosts (most cloud Linux, Intel Macs):
+docker run -d --name harmonie --restart unless-stopped \
+  -p 8842:8842 \
+  -v /path/to/your/music:/music:ro \
+  -v ~/harmonie-data:/data \
+  -v ~/harmonie-models:/root/.cache/harmonie \
+  ghcr.io/mxschll/harmonie:latest
+
+# Verify.
+curl http://localhost:8842/health
+```
+
+That's it. The service starts, scans your library, and exposes the API on `http://localhost:8842`. First scan kicks off automatically and downloads the two model files (~25 MB total) into the cached volume.
+
+On arm64 hosts (Apple Silicon, Pi, AWS Graviton, …) prepend the platform — see [Notes](#notes) below.
+
+### What each mount does
+
+| Host path | Container path | Purpose |
+| --- | --- | --- |
+| `/path/to/your/music` | `/music` | Your music library. Mount **read-only** (`:ro`) — harmonie never writes to it. |
+| `~/harmonie-data` | `/data` | SQLite DB. Persists across container restarts. |
+| `~/harmonie-models` | `/root/.cache/harmonie` | Cached Essentia model files. Optional but recommended — without it the ~25 MB models redownload every time the container is recreated. |
+
+### Common environment variables
+
+Add `-e` flags to the `docker run` command above:
+
+```bash
+docker run -d --name harmonie --restart unless-stopped \
+  -p 8842:8842 \
+  -v /path/to/your/music:/music:ro \
+  -v ~/harmonie-data:/data \
+  -v ~/harmonie-models:/root/.cache/harmonie \
+  -e HARMONIE_API_KEY=change-me \
+  -e HARMONIE_WORKERS=4 \
+  -e HARMONIE_SCAN_INTERVAL_HOURS=6 \
+  -e HARMONIE_LOG_LEVEL=INFO \
+  ghcr.io/mxschll/harmonie:latest
+```
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `HARMONIE_API_KEY` | unset (no auth) | If set, every authenticated request must include `X-API-Key: <value>`. |
+| `HARMONIE_WORKERS` | CPU count | Analysis worker processes. Cap to ~4 on shared hosts to leave room for other services. |
+| `HARMONIE_SCAN_INTERVAL_HOURS` | `6` | Periodic rescan interval. `0` disables and the service only scans on `POST /scan`. |
+| `HARMONIE_SCAN_ON_STARTUP` | `true` | Run a scan immediately on container boot. |
+| `HARMONIE_LOG_LEVEL` | `INFO` | One of `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `HARMONIE_LOG_JSON` | `false` | Emit one-line JSON logs (good for log shippers). |
+| `HARMONIE_BACKEND` | `effnet` | `effnet` (default, with TensorFlow) or `musicextractor` (smaller, no TF). |
+| `HARMONIE_LIBRARIES` | `/music` | Comma- or colon-separated list of paths to scan. Override if you mount multiple library volumes. |
+
+The full list lives in [Configuration](#configuration) further down.
+
+### Multiple libraries
+
+Mount each one and tell harmonie about them:
+
+```bash
+docker run -d --name harmonie --restart unless-stopped \
+  -p 8842:8842 \
+  -v /mnt/flac-collection:/music/flac:ro \
+  -v /mnt/mp3-archive:/music/mp3:ro \
+  -v ~/harmonie-data:/data \
+  -v ~/harmonie-models:/root/.cache/harmonie \
+  -e HARMONIE_LIBRARIES=/music/flac,/music/mp3 \
+  ghcr.io/mxschll/harmonie:latest
+```
+
+### docker compose alternative
+
+If you'd rather use compose, the repo ships a `docker-compose.yml`:
+
+```bash
+git clone https://github.com/mxschll/harmonie.git
+cd harmonie
+cp .env.example .env
+# Edit .env to point HARMONIE_LIBRARIES at your music
+# Edit docker-compose.yml to map your music volume at the matching container path
+docker compose up -d
+docker compose logs -f harmonie
+```
+
+### Pulling the right image
+
+```bash
+# x86_64 hosts (most cloud Linux, Intel Macs): no flag needed.
 docker pull ghcr.io/mxschll/harmonie:latest
 
 # arm64 hosts (Apple Silicon, Pi 4/5, AWS Graviton, …) — pulling without
 # --platform fails with "no matching manifest". Force the amd64 image and
 # Docker runs it via emulation (Rosetta on Apple Silicon, qemu elsewhere):
 docker pull --platform linux/amd64 ghcr.io/mxschll/harmonie:latest
-docker run  --platform linux/amd64 --rm ghcr.io/mxschll/harmonie:latest
+docker run  --platform linux/amd64 -d --name harmonie ...
 
 # Or set it once for the shell so you don't have to keep typing it:
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
@@ -30,7 +119,7 @@ export DOCKER_DEFAULT_PLATFORM=linux/amd64
 
 > The image is amd64-only because Essentia ships only manylinux x86_64 wheels on PyPI. Apple Silicon runs amd64 images well via Rosetta (~30–50% slower than native for Essentia inference); slower arm64 hosts that can't tolerate emulation can install directly with `pip` (see the local-Python instructions below).
 
-Available tags:
+### Available tags
 
 | Tag                    | What it tracks                                |
 | ---------------------- | --------------------------------------------- |
@@ -40,18 +129,11 @@ Available tags:
 | `sha-<short>`          | A specific commit                             |
 | `vX.Y.Z` / `X.Y` / `X` | Manually-tagged release (`git tag vX.Y.Z`)    |
 
-To run with `docker compose`, copy the example config and point it at your library:
+### Notes
 
-```bash
-cp .env.example .env
-# Edit .env: set HARMONIE_LIBRARIES (path inside the container) and edit
-# docker-compose.yml to mount your library at that path.
-
-docker compose up -d
-docker compose logs -f harmonie
-```
-
-The service stores its DB in `./data/harmonie.db`. On first start it downloads the Discogs-Effnet model (~18 MB) into `~/.cache/harmonie/models/` inside the container.
+* The service stores its DB in `/data/harmonie.db` inside the container.
+* On first start it downloads the Discogs-Effnet model (~18 MB) and the Genre-400 classifier head (~7 MB) into `/root/.cache/harmonie/models/`. Mount that directory as a volume to avoid re-downloading on container recreation.
+* The first scan is the slow one — about 1 second per track on a single core, or ~250 ms with `HARMONIE_WORKERS` cranked up. Subsequent scans are incremental and only re-extract files whose `size`/`mtime` changed.
 
 ## Quick start (local Python)
 
