@@ -1,4 +1,4 @@
-name: Tests
+name: Tests (Python 3.9)
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: tests-${{ github.ref }}
+  group: tests-py39-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -18,23 +18,19 @@ env:
   # Opt every JS action into Node 24 ahead of the June 2026 deadline.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
+# 3.9 is our declared minimum supported version. Pinned in its own workflow
+# so README badges can show pass/fail per Python version at a glance.
 jobs:
   pytest:
-    name: pytest (py${{ matrix.python-version }})
+    name: pytest
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.9 is our declared minimum; 3.11 matches the production
-        # Dockerfile. Two versions cover the surface without bloating CI.
-        python-version: ['3.9', '3.11']
     steps:
       - uses: actions/checkout@v5
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.9
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.9'
           cache: pip
           cache-dependency-path: pyproject.toml
 

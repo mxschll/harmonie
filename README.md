@@ -1,6 +1,7 @@
 # harmonie
 
-[![Tests](https://github.com/mxschll/harmonie/actions/workflows/tests.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests.yml)
+[![Tests (Python 3.9)](https://github.com/mxschll/harmonie/actions/workflows/tests-py39.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests-py39.yml)
+[![Tests (Python 3.11)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml)
 [![Docker](https://github.com/mxschll/harmonie/actions/workflows/docker.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/docker.yml)
 
 Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate), classifies each track against the 400 Discogs styles (House, Techno, Trap, Punk, …), and reads the file's tags (artist, album, title, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/). Everything is stored in SQLite, and exposed via an HTTP API for similarity queries, style-filtered listings, and playlist generation.
@@ -14,10 +15,20 @@ The intended deployment is a long-running container that periodically rescans th
 A `linux/amd64` image is published to GitHub Container Registry on every push to `main` and on each version tag:
 
 ```bash
+# x86_64 hosts (most cloud Linux, Intel Macs):
 docker pull ghcr.io/mxschll/harmonie:latest
+
+# arm64 hosts (Apple Silicon, Pi 4/5, AWS Graviton, …) — pulling without
+# --platform fails with "no matching manifest". Force the amd64 image and
+# Docker runs it via emulation (Rosetta on Apple Silicon, qemu elsewhere):
+docker pull --platform linux/amd64 ghcr.io/mxschll/harmonie:latest
+docker run  --platform linux/amd64 --rm ghcr.io/mxschll/harmonie:latest
+
+# Or set it once for the shell so you don't have to keep typing it:
+export DOCKER_DEFAULT_PLATFORM=linux/amd64
 ```
 
-> The image is amd64-only because Essentia ships only manylinux x86_64 wheels on PyPI. Apple Silicon and other arm64 hosts run the image transparently via Docker's emulation layer; Pi-class arm64 hosts that can't tolerate emulation can install directly with `pip` (see the local-Python instructions below).
+> The image is amd64-only because Essentia ships only manylinux x86_64 wheels on PyPI. Apple Silicon runs amd64 images well via Rosetta (~30–50% slower than native for Essentia inference); slower arm64 hosts that can't tolerate emulation can install directly with `pip` (see the local-Python instructions below).
 
 Available tags:
 
@@ -389,10 +400,13 @@ Migration functions must use `conn.execute(...)` for each statement individually
 
 ## Continuous integration
 
-Two workflows run on every push and pull request:
+Three workflows run on every push and pull request:
 
-* **[`tests.yml`](.github/workflows/tests.yml)** — `pytest` against Python 3.9 and 3.11.
+* **[`tests-py39.yml`](.github/workflows/tests-py39.yml)** — `pytest` against Python 3.9 (the declared minimum).
+* **[`tests-py311.yml`](.github/workflows/tests-py311.yml)** — `pytest` against Python 3.11 (matches the production Dockerfile).
 * **[`docker.yml`](.github/workflows/docker.yml)** — `docker buildx` of the production image for `linux/amd64`. On every push to `main` the image is published to `ghcr.io/mxschll/harmonie` with `latest`, `main`, `sha-<short>`, and an auto-incrementing `0.1.<n>` version tag (where `n` is the workflow run number — no manual tagging required). On a `vX.Y.Z` git tag, the image picks up `X.Y.Z`, `X.Y`, and `X` as well. On pull requests the image is built but not pushed.
+
+Splitting the test workflow per Python version means the badges at the top of this README show each version's status independently — a regression on one Python doesn't make both badges go red.
 
 ## Layout
 
