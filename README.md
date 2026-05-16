@@ -2,7 +2,6 @@
 
 [![Tests (Python 3.9)](https://github.com/mxschll/harmonie/actions/workflows/tests-py39.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests-py39.yml)
 [![Tests (Python 3.11)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml)
-[![Docker](https://github.com/mxschll/harmonie/actions/workflows/docker.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/docker.yml)
 
 Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate), classifies each track against the 400 Discogs styles (House, Techno, Trap, Punk, ...), and reads file tags (artist, album, title, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/). Everything is stored in SQLite and exposed via an HTTP API for similarity queries, style-filtered listings, and playlist generation.
 
@@ -12,13 +11,12 @@ Run it as a long-lived service. It rescans on a schedule and serves any HTTP cli
 
 ## Contents
 
-- [Install with pip](#quick-start-pip) (recommended)
-- [Install with Docker](#quick-start-docker)
+- [Install](#install)
 - [API](#api)
 - [Playlists](#playlists)
 - [Configuration](#configuration)
 
-## Quick start (pip)
+## Install
 
 The fastest install on any host with Python 3.9+ is via [pipx][pipx], which puts harmonie in its own isolated virtualenv and the `harmonie` binary on your PATH.
 
@@ -64,92 +62,6 @@ python3 -m venv ~/.harmonie
 This is the recommended path on arm64 hosts (Apple Silicon, Pi, Graviton). Essentia ships native arm64 wheels; no Rosetta or qemu emulation.
 
 [pipx]: https://pipx.pypa.io/
-
-## Quick start (Docker)
-
-A `linux/amd64` image is published to GitHub Container Registry on every push to `main`.
-
-### One-liner
-
-Edit the two paths and run:
-
-```bash
-docker run -d --name harmonie --restart unless-stopped \
-  --platform linux/amd64 \
-  -p 8842:8842 \
-  -v /path/to/your/music:/music:ro \
-  -v ~/harmonie-data:/data \
-  -v ~/harmonie-models:/root/.cache/harmonie \
-  ghcr.io/mxschll/harmonie:latest
-
-curl http://localhost:8842/health
-```
-
-The service starts, scans your library, and exposes the API on `http://localhost:8842`. The first scan downloads two model files (~25 MB) into the cached volume.
-
-The image is amd64-only because Essentia ships only manylinux x86_64 wheels on PyPI. `--platform linux/amd64` is a no-op on x86_64 hosts and forces emulation on arm64.
-
-> **On Apple Silicon, the amd64 image runs under Rosetta. TensorFlow inference is 10x+ slower than native and the workers' memory footprint can OOM under Docker Desktop's default 2 GB limit, leaving the scan stuck at zero progress.** On any arm64 host, use the pip install above. Essentia ships native macOS arm64 wheels with no emulation involved. If you have to use Docker on arm64, bump Docker's memory ceiling to 8 GB and set `HARMONIE_WORKERS=1`, or fall back to `HARMONIE_BACKEND=musicextractor` which skips TensorFlow entirely (you lose style classification; the rest works).
-
-### What each mount does
-
-| Host path | Container path | Purpose |
-| --- | --- | --- |
-| `/path/to/your/music` | `/music` | Your music library. Mount read-only (`:ro`); harmonie never writes to it. |
-| `~/harmonie-data` | `/data` | SQLite DB. Persists across container restarts. |
-| `~/harmonie-models` | `/root/.cache/harmonie` | Cached Essentia models. Without this volume, the ~25 MB models redownload every time the container is recreated. |
-
-### Environment variables
-
-Add `-e` flags to the `docker run` command above. See [Configuration](#configuration) for the full list:
-
-```bash
-docker run -d --name harmonie --restart unless-stopped \
-  --platform linux/amd64 \
-  -p 8842:8842 \
-  -v /path/to/your/music:/music:ro \
-  -v ~/harmonie-data:/data \
-  -v ~/harmonie-models:/root/.cache/harmonie \
-  -e HARMONIE_API_KEY=change-me \
-  -e HARMONIE_WORKERS=4 \
-  ghcr.io/mxschll/harmonie:latest
-```
-
-### Multiple libraries
-
-Mount each one and tell harmonie about them:
-
-```bash
-docker run -d --name harmonie --restart unless-stopped \
-  --platform linux/amd64 \
-  -p 8842:8842 \
-  -v /mnt/flac-collection:/music/flac:ro \
-  -v /mnt/mp3-archive:/music/mp3:ro \
-  -v ~/harmonie-data:/data \
-  -v ~/harmonie-models:/root/.cache/harmonie \
-  -e HARMONIE_LIBRARIES=/music/flac,/music/mp3 \
-  ghcr.io/mxschll/harmonie:latest
-```
-
-### docker compose alternative
-
-The repo ships a `docker-compose.yml`:
-
-```bash
-git clone https://github.com/mxschll/harmonie.git
-cd harmonie
-cp .env.example .env
-# Edit .env to point HARMONIE_LIBRARIES at your music.
-# Edit docker-compose.yml to map your music volume at the matching container path.
-docker compose up -d
-docker compose logs -f harmonie
-```
-
-### Notes
-
-* The service stores its DB in `/data/harmonie.db` inside the container.
-* On first start it downloads the Discogs-Effnet model (~18 MB) and the Genre-400 classifier head (~7 MB) into `/root/.cache/harmonie/models/`. Mount that directory as a volume to avoid re-downloading on container recreation.
-* The first scan is the slow one: about 1 second per track on a single core, or ~250 ms with `HARMONIE_WORKERS` cranked up. Subsequent scans are incremental and only re-extract files whose `size`/`mtime` changed.
 
 ## API
 

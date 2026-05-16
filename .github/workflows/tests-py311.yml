@@ -17,8 +17,8 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
-# 3.11 matches the production Dockerfile. Pinned in its own workflow so
-# README badges can show pass/fail per Python version at a glance.
+# Pinned in its own workflow so README badges can show pass/fail per Python
+# version at a glance.
 jobs:
   pytest:
     name: pytest
