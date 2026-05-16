@@ -1,4 +1,4 @@
-name: CI
+name: Docker
 
 on:
   push:
@@ -7,64 +7,25 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Cancel in-flight runs for the same ref when a new push lands.
+# Cancel in-flight builds for the same ref when a new push lands.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: docker-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
-  # Opt every JS action into Node 24 ahead of the June 2026 deadline.
-  # Silences the deprecation warning for actions still published on Node 20
-  # (docker/login-action, setup-buildx-action, metadata-action, etc.).
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
+# Built for linux/amd64 only. Essentia (and essentia-tensorflow) publish only
+# manylinux_2_17_x86_64 wheels on PyPI — no linux/aarch64 wheel exists, so a
+# multi-arch build would fail on the arm64 leg. Apple Silicon and other
+# arm64 hosts run the amd64 image via Rosetta / qemu-user, which Docker
+# handles transparently.
 jobs:
-  # ---------------------------------------------------------------------
-  # Tests
-  # ---------------------------------------------------------------------
-  test:
-    name: pytest (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.9 is our declared minimum; 3.11 matches the production
-        # Dockerfile. Two versions cover the surface without bloating CI.
-        python-version: ['3.9', '3.11']
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
-
-      - name: Install
-        # --pre because essentia-tensorflow is a .dev pre-release.
-        run: |
-          python -m pip install --upgrade pip
-          pip install --pre -e ".[dev]"
-
-      - name: Run tests
-        run: pytest -q
-
-  # ---------------------------------------------------------------------
-  # Docker build (always) + push (main / tags only)
-  #
-  # Built for linux/amd64 only. Essentia (and essentia-tensorflow) publish
-  # only manylinux_2_17_x86_64 wheels on PyPI — no linux/aarch64 wheel
-  # exists, so a multi-arch build would fail on the arm64 leg. Apple
-  # Silicon and other arm64 hosts run the amd64 image via Rosetta /
-  # qemu-user, which Docker handles transparently.
-  # ---------------------------------------------------------------------
-  docker:
-    name: docker (build${{ github.event_name == 'pull_request' && '' || ' & push' }})
-    needs: test
+  build:
+    name: build${{ github.event_name == 'pull_request' && '' || ' & push' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

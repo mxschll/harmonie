@@ -1,5 +1,8 @@
 # harmonie
 
+[![Tests](https://github.com/mxschll/harmonie/actions/workflows/tests.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests.yml)
+[![Docker](https://github.com/mxschll/harmonie/actions/workflows/docker.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/docker.yml)
+
 Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate) and reads the file's tags (artist, album, title, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/), stores everything in SQLite, and exposes an HTTP API for similarity queries and playlist generation.
 
 The default backend is Essentia's **Discogs-Effnet** model — a 1280-d embedding trained on Discogs tags that's well suited to music similarity. A lighter `MusicExtractor` backend is available for hosts without TensorFlow.
@@ -253,13 +256,10 @@ Migration functions must use `conn.execute(...)` for each statement individually
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request:
+Two workflows run on every push and pull request:
 
-* `pytest` against Python 3.9 and 3.11.
-* `docker buildx` of the production image for `linux/amd64`.
-* On every push to `main` the image is published to `ghcr.io/mxschll/harmonie` with `latest`, `main`, `sha-<short>`, and an auto-incrementing `0.1.<n>` version tag (where `n` is the workflow run number — no manual tagging required).
-* On pushes of a version tag (`git tag vX.Y.Z`), the image picks up `X.Y.Z`, `X.Y`, and `X` tags as well.
-* On pull requests the image is built but not pushed — Dockerfile changes are validated without touching the registry.
+* **[`tests.yml`](.github/workflows/tests.yml)** — `pytest` against Python 3.9 and 3.11.
+* **[`docker.yml`](.github/workflows/docker.yml)** — `docker buildx` of the production image for `linux/amd64`. On every push to `main` the image is published to `ghcr.io/mxschll/harmonie` with `latest`, `main`, `sha-<short>`, and an auto-incrementing `0.1.<n>` version tag (where `n` is the workflow run number — no manual tagging required). On a `vX.Y.Z` git tag, the image picks up `X.Y.Z`, `X.Y`, and `X` as well. On pull requests the image is built but not pushed.
 
 ## Layout
 

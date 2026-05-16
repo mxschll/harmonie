@@ -1,0 +1,48 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Opt every JS action into Node 24 ahead of the June 2026 deadline.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  pytest:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is our declared minimum; 3.11 matches the production
+        # Dockerfile. Two versions cover the surface without bloating CI.
+        python-version: ['3.9', '3.11']
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        # --pre because essentia-tensorflow is a .dev pre-release.
+        run: |
+          python -m pip install --upgrade pip
+          pip install --pre -e ".[dev]"
+
+      - name: Run tests
+        run: pytest -q
