@@ -29,9 +29,13 @@ from harmonie.tags import Tags
 # ---------------------------------------------------------------------------
 
 
-def _populate(db, name: str, *, bpm: float, key: str = "A", scale: str = "minor"):
+def _populate(
+    db, lib_root: Path, name: str, *,
+    bpm: float, key: str = "A", scale: str = "minor",
+):
+    path = str(lib_root / name)
     return db.upsert_track(
-        path=f"/lib/{name}",
+        path=path,
         size=100,
         mtime=1.0,
         duration=180.0,
@@ -43,7 +47,7 @@ def _populate(db, name: str, *, bpm: float, key: str = "A", scale: str = "minor"
         ),
         descriptor_version=DESCRIPTOR_VERSION,
         tags=Tags(artist=name, title=name.replace(".flac", "")),
-        library_root="/lib",
+        library_root=str(lib_root),
         relative_path=name,
     )
 
@@ -51,20 +55,27 @@ def _populate(db, name: str, *, bpm: float, key: str = "A", scale: str = "minor"
 @pytest.fixture
 def cli_env(tmp_path: Path, monkeypatch):
     """Build a populated DB at the same path the CLI will open, and patch
-    ``cli.get_settings`` to point at it. Returns ``(db, settings)``."""
+    ``cli.get_settings`` to point at it. Returns ``(db, settings, lib)``,
+    where ``lib`` is the (hermetic, tmp_path-rooted) library directory the
+    fake tracks live under — important because some CLI commands resolve
+    user-supplied paths through symlinks (and ``/lib`` is a symlink on
+    most Linux distros)."""
     from harmonie.db import Database
 
     settings = Settings(libraries=[tmp_path], data_dir=tmp_path)
     db = Database(settings.db_path)
 
-    _populate(db, "fast.flac", bpm=140)
-    _populate(db, "mid.flac", bpm=120)
-    _populate(db, "slow.flac", bpm=80)
+    lib = tmp_path / "library"
+    lib.mkdir()
+
+    _populate(db, lib, "fast.flac", bpm=140)
+    _populate(db, lib, "mid.flac", bpm=120)
+    _populate(db, lib, "slow.flac", bpm=80)
 
     # CLI commands close the DB they open — leave our handle live for the
     # test, then close at teardown.
     monkeypatch.setattr(cli_mod, "get_settings", lambda: settings)
-    yield db, settings
+    yield db, settings, lib
     db.close()
 
 
@@ -138,7 +149,7 @@ class TestList:
 
 class TestInfo:
     def test_info_by_id(self, cli_env, capsys):
-        db, _ = cli_env
+        db, _, _ = cli_env
         track_id = next(iter(db.list_tracks(limit=1)[0]))["id"]
         rc = main(["info", str(track_id)])
         assert rc == 0
@@ -149,10 +160,12 @@ class TestInfo:
         assert "Loudness" in out
 
     def test_info_by_path(self, cli_env, capsys):
-        rc = main(["info", "/lib/mid.flac"])
+        _db, _settings, lib = cli_env
+        track_path = str(lib / "mid.flac")
+        rc = main(["info", track_path])
         assert rc == 0
         out = capsys.readouterr().out
-        assert "/lib/mid.flac" in out
+        assert track_path in out
         # mid was populated with bpm=120.
         assert "120" in out
 
@@ -163,11 +176,13 @@ class TestInfo:
         assert "Not in database" in err
 
     def test_info_json(self, cli_env, capsys):
-        rc = main(["info", "/lib/mid.flac", "--json"])
+        _db, _settings, lib = cli_env
+        track_path = str(lib / "mid.flac")
+        rc = main(["info", track_path, "--json"])
         assert rc == 0
         body = json.loads(capsys.readouterr().out)
         assert body["bpm"] == 120
-        assert body["path"] == "/lib/mid.flac"
+        assert body["path"] == track_path
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +192,7 @@ class TestInfo:
 
 class TestSimilar:
     def test_similar_returns_other_tracks(self, cli_env, capsys):
-        db, _ = cli_env
+        db, _, _ = cli_env
         track_id = next(iter(db.list_tracks(limit=1)[0]))["id"]
         rc = main(["similar", str(track_id), "-n", "5"])
         assert rc == 0

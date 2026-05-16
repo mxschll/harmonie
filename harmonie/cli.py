@@ -166,7 +166,17 @@ def cmd_info(args: argparse.Namespace) -> int:
         if args.target.isdigit():
             row = db.get_track_by_id(int(args.target))
         else:
-            row = db.get_track_by_path(str(Path(args.target).expanduser().resolve()))
+            # Try the path the user typed first, then fall back to a
+            # resolved version. Paths get stored at scan time as the
+            # walker saw them, which may not be the canonical filesystem
+            # path — especially with symlinked library mounts (``/data/
+            # music`` → ``/mnt/music``) or with directories like ``/lib``
+            # that are themselves symlinks on most Linux distros.
+            row = db.get_track_by_path(args.target)
+            if row is None:
+                resolved = str(Path(args.target).expanduser().resolve())
+                if resolved != args.target:
+                    row = db.get_track_by_path(resolved)
         if row is None:
             print(f"Not in database: {args.target}", file=sys.stderr)
             return 1
