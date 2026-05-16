@@ -40,12 +40,16 @@ logger = logging.getLogger("harmonie.analyzer")
 @dataclass
 class ScanStatus:
     state: str = "idle"  # idle | scanning
+    # Sub-phase visible while ``state == "scanning"``. Lets clients tell the
+    # difference between "walking the filesystem" and "running TF inference",
+    # which can have very different time profiles on slow mounts.
+    phase: str = "idle"  # idle | enumerating | extracting | pruning
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     last_duration_sec: Optional[float] = None
     last_error: Optional[str] = None
 
-    discovered: int = 0       # files found by walker
+    discovered: int = 0       # files found by walker (updated live)
     full: int = 0             # full extractions (model + descriptors)
     descriptors_only: int = 0 # descriptor top-ups
     skipped: int = 0          # already up-to-date
@@ -57,6 +61,7 @@ class ScanStatus:
     def snapshot(self) -> dict:
         return {
             "state": self.state,
+            "phase": self.phase,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "last_duration_sec": self.last_duration_sec,
@@ -125,7 +130,9 @@ class Analyzer:
         return self.status
 
     def _run_scan(self, *, force: bool) -> None:
-        self.status = ScanStatus(state="scanning", started_at=time.time())
+        self.status = ScanStatus(
+            state="scanning", phase="enumerating", started_at=time.time(),
+        )
         t0 = time.monotonic()
 
         libs = [Path(p) for p in self.settings.libraries]
@@ -145,8 +152,9 @@ class Analyzer:
             logger.warning("library root unreachable, skipping: %s", p)
 
         # Enumerate files. On slow mounts (NFS, remote SMB) this can take
-        # minutes. Log a status line every 10 seconds so users see progress
-        # rather than wondering if the process is stuck.
+        # minutes. Update self.status.discovered on every yield so callers
+        # polling /api/v1/scan see live progress, and log a status line every
+        # 10 seconds so the CLI sees something too.
         if reachable:
             logger.info(
                 "scanning libraries: %s",
@@ -156,13 +164,13 @@ class Analyzer:
         last_progress = time.monotonic()
         for f in iter_audio_files(reachable):
             files.append(f)
+            self.status.discovered = len(files)
             now = time.monotonic()
             if now - last_progress > 10:
                 logger.info(
                     "enumerating: %d audio file(s) found so far...", len(files),
                 )
                 last_progress = now
-        self.status.discovered = len(files)
         logger.info("discovered %d audio file(s)", len(files))
 
         full_jobs, desc_jobs, skipped = build_jobs(
@@ -178,6 +186,7 @@ class Analyzer:
         # multi-second TF model load when the scan is a no-op.
         all_jobs: list = list(full_jobs) + list(desc_jobs)
         if all_jobs:
+            self.status.phase = "extracting"
             if self.pool is None:
                 self.start()
             assert self.pool is not None
@@ -187,6 +196,7 @@ class Analyzer:
         # Drop rows for files that disappeared, scoped to roots we actually
         # walked. Skip pruning entirely if no roots were reachable.
         if reachable:
+            self.status.phase = "pruning"
             present = {str(f) for f in files}
             removed = self.db.prune_missing_under_roots(
                 roots=reachable, keep=present
@@ -207,6 +217,7 @@ class Analyzer:
         # everything is simpler and the rebuild is cheap).
         self.index.invalidate()
         self.status.state = "idle"
+        self.status.phase = "idle"
         self.status.finished_at = time.time()
         self.status.last_duration_sec = elapsed
         logger.info(

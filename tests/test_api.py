@@ -153,6 +153,7 @@ def _stub_analyzer(db, index, settings, embedding_dim=4):
         def snapshot(self):
             return {
                 "state": self.state,
+                "phase": "idle",
                 "started_at": None,
                 "finished_at": None,
                 "last_duration_sec": None,
@@ -248,6 +249,14 @@ class TestScanResource:
         r = c.get("/api/v1/scan")
         assert r.status_code == 200, r.text
         assert r.json()["state"] == "idle"
+
+    def test_get_scan_includes_phase(self, client):
+        """The /scan response must expose the sub-phase field so callers can
+        tell ``enumerating`` from ``extracting`` from ``pruning``."""
+        c, _ = client
+        body = c.get("/api/v1/scan").json()
+        assert "phase" in body
+        assert body["phase"] == "idle"  # no scan running
 
     def test_old_scan_status_path_is_gone(self, client):
         c, _ = client

@@ -269,6 +269,16 @@ class ScanState(BaseModel):
         ...,
         description="``idle`` | ``scanning`` | ``error``.",
     )
+    phase: str = Field(
+        "idle",
+        description=(
+            "Sub-phase visible while ``state == 'scanning'``: "
+            "``enumerating`` (walking the filesystem), ``extracting`` "
+            "(running TF inference and writing tracks), or ``pruning`` "
+            "(removing rows for files that disappeared). ``idle`` when "
+            "no scan is running."
+        ),
+    )
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     last_duration_sec: Optional[float] = None
