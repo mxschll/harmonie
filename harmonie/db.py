@@ -51,6 +51,7 @@ class TrackFilter:
         "bpm_min", "bpm_max", "key", "scale",
         "danceability_min", "danceability_max",
         "loudness_min", "loudness_max",
+        "styles", "style_min_probability", "style_match",
     )
 
     def __init__(
@@ -64,6 +65,9 @@ class TrackFilter:
         danceability_max: Optional[float] = None,
         loudness_min: Optional[float] = None,
         loudness_max: Optional[float] = None,
+        styles: Optional[list[str]] = None,
+        style_min_probability: float = 0.0,
+        style_match: str = "any",
     ) -> None:
         self.bpm_min = bpm_min
         self.bpm_max = bpm_max
@@ -73,8 +77,14 @@ class TrackFilter:
         self.danceability_max = danceability_max
         self.loudness_min = loudness_min
         self.loudness_max = loudness_max
+        self.styles = list(styles) if styles else None
+        self.style_min_probability = float(style_min_probability)
+        self.style_match = style_match
 
     def to_sql(self) -> tuple[str, list[Any]]:
+        """SQL fragment for the *tracks* table only. Style filtering is
+        applied separately via :meth:`Database.filter_ids_by_style` because
+        it lives in a child table."""
         clauses: list[str] = []
         params: list[Any] = []
         if self.bpm_min is not None:
@@ -106,8 +116,17 @@ class TrackFilter:
             return "", []
         return " AND ".join(clauses), params
 
+    def has_style_filter(self) -> bool:
+        return bool(self.styles)
+
     def is_empty(self) -> bool:
-        return all(getattr(self, slot) is None for slot in self.__slots__)
+        if self.styles:
+            return False
+        return all(
+            getattr(self, slot) is None
+            for slot in self.__slots__
+            if slot not in ("styles", "style_min_probability", "style_match")
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +208,17 @@ class Database:
         tags: Optional[Tags] = None,
         library_root: Optional[str] = None,
         relative_path: Optional[str] = None,
+        style_activations: Optional[np.ndarray] = None,
+        top_styles: Optional[list[tuple[str, float]]] = None,
     ) -> int:
         emb = np.ascontiguousarray(embedding.astype(np.float32, copy=False))
         t = tags or Tags()
+        style_blob: Optional[bytes] = None
+        if style_activations is not None:
+            sa = np.ascontiguousarray(
+                style_activations.astype(np.float32, copy=False)
+            )
+            style_blob = sa.tobytes()
         with self.transaction() as cur:
             cur.execute(
                 """
@@ -202,10 +229,11 @@ class Database:
                     bpm, bpm_confidence, key, scale, key_strength,
                     loudness_db, danceability, onset_rate,
                     artist, album, title, track_number,
+                    style_activations,
                     analyzed_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     library_root         = excluded.library_root,
                     relative_path        = excluded.relative_path,
@@ -228,6 +256,7 @@ class Database:
                     album                = excluded.album,
                     title                = excluded.title,
                     track_number         = excluded.track_number,
+                    style_activations    = excluded.style_activations,
                     analyzed_at          = excluded.analyzed_at
                 """,
                 (
@@ -253,11 +282,29 @@ class Database:
                     t.album,
                     t.title,
                     t.track_number,
+                    style_blob,
                     time.time(),
                 ),
             )
             cur.execute("SELECT id FROM tracks WHERE path = ?", (path,))
-            return int(cur.fetchone()[0])
+            track_id = int(cur.fetchone()[0])
+
+            # Replace the per-track style rows wholesale. ON DELETE CASCADE
+            # covers the case where the track row was just inserted; for
+            # an upsert we still need to clear the old rows explicitly.
+            cur.execute(
+                "DELETE FROM track_styles WHERE track_id = ?", (track_id,)
+            )
+            if top_styles:
+                cur.executemany(
+                    "INSERT INTO track_styles (track_id, style, probability) "
+                    "VALUES (?, ?, ?)",
+                    [
+                        (track_id, str(label), float(prob))
+                        for label, prob in top_styles
+                    ],
+                )
+            return track_id
 
     def update_descriptors(
         self,
@@ -518,6 +565,114 @@ class Database:
         )
         return {int(r["id"]): (r["bpm"], r["key"], r["scale"]) for r in cur}
 
+    # -- styles --------------------------------------------------------
+
+    def get_track_styles(self, track_id: int) -> list[tuple[str, float]]:
+        """Top-K ``(style, probability)`` rows for one track, highest first."""
+        cur = self._conn.execute(
+            "SELECT style, probability FROM track_styles "
+            "WHERE track_id = ? ORDER BY probability DESC",
+            (int(track_id),),
+        )
+        return [(str(r["style"]), float(r["probability"])) for r in cur]
+
+    def get_styles_by_ids(
+        self, ids: list[int]
+    ) -> dict[int, list[tuple[str, float]]]:
+        """Bulk version of :meth:`get_track_styles`. One query for all IDs."""
+        if not ids:
+            return {}
+        placeholders = ",".join("?" * len(ids))
+        cur = self._conn.execute(
+            f"SELECT track_id, style, probability FROM track_styles "
+            f"WHERE track_id IN ({placeholders}) "
+            f"ORDER BY track_id, probability DESC",
+            tuple(int(i) for i in ids),
+        )
+        out: dict[int, list[tuple[str, float]]] = {i: [] for i in ids}
+        for r in cur:
+            out[int(r["track_id"])].append(
+                (str(r["style"]), float(r["probability"]))
+            )
+        return out
+
+    def filter_ids_by_style(
+        self,
+        styles: list[str],
+        *,
+        min_probability: float = 0.0,
+        match: str = "any",
+    ) -> set[int]:
+        """Track IDs whose ``track_styles`` rows match the given style names.
+
+        ``match='any'`` (default): track has at least one of the styles above
+        ``min_probability``.
+        ``match='all'``: track has every style above ``min_probability``.
+
+        Style names match either exactly or as a prefix when the caller
+        passes a bare genre like ``"Electronic"`` (matches all
+        ``"Electronic---*"``). Passing the full ``"Genre---Style"`` form is
+        always exact.
+        """
+        if not styles:
+            return set()
+        # Build an OR over `style = ?` (exact) or `style LIKE ?` (prefix).
+        clauses: list[str] = []
+        params: list[Any] = []
+        for s in styles:
+            if "---" in s:
+                clauses.append("style = ?")
+                params.append(s)
+            else:
+                clauses.append("style LIKE ?")
+                params.append(f"{s}---%")
+        where_styles = " OR ".join(clauses)
+        params.append(float(min_probability))
+        cur = self._conn.execute(
+            f"SELECT track_id, COUNT(DISTINCT style) AS hits "
+            f"FROM track_styles "
+            f"WHERE ({where_styles}) AND probability >= ? "
+            f"GROUP BY track_id",
+            tuple(params),
+        )
+        if match == "all":
+            need = len(styles)
+            return {int(r["track_id"]) for r in cur if int(r["hits"]) >= need}
+        return {int(r["track_id"]) for r in cur}
+
+    def list_styles(
+        self, *, min_probability: float = 0.0
+    ) -> list[dict]:
+        """Enumerate every style currently present in the DB.
+
+        Returns a list of ``{style, track_count, mean_probability,
+        max_probability}`` dicts ordered by ``track_count`` descending.
+        Useful for building a UI of available filters and for sanity-checking
+        what the model is confident about across the library.
+        """
+        cur = self._conn.execute(
+            """
+            SELECT style,
+                   COUNT(*) AS track_count,
+                   AVG(probability) AS mean_probability,
+                   MAX(probability) AS max_probability
+              FROM track_styles
+             WHERE probability >= ?
+             GROUP BY style
+             ORDER BY track_count DESC, style ASC
+            """,
+            (float(min_probability),),
+        )
+        return [
+            {
+                "style": str(r["style"]),
+                "track_count": int(r["track_count"]),
+                "mean_probability": float(r["mean_probability"]),
+                "max_probability": float(r["max_probability"]),
+            }
+            for r in cur
+        ]
+
     def needs_embedding(self, path: str, size: int, mtime: float, model: str) -> bool:
         meta = self.get_track_by_path(path)
         if meta is None:
@@ -563,6 +718,18 @@ class Database:
             if f_sql:
                 clauses.append(f_sql)
                 params.extend(f_params)
+            if filter.has_style_filter():
+                style_ids = self.filter_ids_by_style(
+                    filter.styles or [],
+                    min_probability=filter.style_min_probability,
+                    match=filter.style_match,
+                )
+                if not style_ids:
+                    # Style filter rules everything out — short-circuit.
+                    return [], 0
+                placeholders = ",".join("?" * len(style_ids))
+                clauses.append(f"id IN ({placeholders})")
+                params.extend(int(i) for i in style_ids)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
         total = self._conn.execute(
@@ -608,7 +775,15 @@ class Database:
         cur = self._conn.execute(
             f"SELECT id FROM tracks {where}", tuple(params)
         )
-        return {int(r["id"]) for r in cur}
+        ids = {int(r["id"]) for r in cur}
+        if filter is not None and filter.has_style_filter():
+            style_ids = self.filter_ids_by_style(
+                filter.styles or [],
+                min_probability=filter.style_min_probability,
+                match=filter.style_match,
+            )
+            ids &= style_ids
+        return ids
 
     def all_embeddings(
         self, model: Optional[str] = None

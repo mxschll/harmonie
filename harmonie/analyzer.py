@@ -218,6 +218,8 @@ class Analyzer:
                     tags=result.tags,
                     library_root=lib_root,
                     relative_path=rel_path,
+                    style_activations=result.style_activations,
+                    top_styles=result.top_styles,
                 )
                 self.status.full += 1
             except Exception as e:  # pragma: no cover

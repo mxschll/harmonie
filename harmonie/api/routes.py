@@ -32,6 +32,9 @@ from .schemas import (
     ScanTriggerResult,
     ServiceStatus,
     SimilarResult,
+    StyleEnumeration,
+    StyleList,
+    StyleScore,
     Track,
     TrackList,
     TrackLookupBody,
@@ -90,10 +93,19 @@ def _filter_from_params(p: Optional[FilterParams]) -> Optional[TrackFilter]:
         danceability_max=p.danceability_max,
         loudness_min=p.loudness_min,
         loudness_max=p.loudness_max,
+        styles=p.styles,
+        style_min_probability=p.style_min_probability,
+        style_match=p.style_match,
     )
 
 
-def _row_to_summary(row: dict) -> TrackSummary:
+def _styles_to_schema(rows: list[tuple[str, float]]) -> list[StyleScore]:
+    return [StyleScore(style=s, probability=p) for s, p in rows]
+
+
+def _row_to_summary(
+    row: dict, styles: Optional[list[tuple[str, float]]] = None
+) -> TrackSummary:
     return TrackSummary(
         id=row["id"],
         path=row["path"],
@@ -110,16 +122,18 @@ def _row_to_summary(row: dict) -> TrackSummary:
         scale=row.get("scale"),
         danceability=row.get("danceability"),
         loudness_db=row.get("loudness_db"),
+        styles=_styles_to_schema(styles or []),
     )
 
 
 def _enrich_matches(db: Database, matches) -> list[MatchOut]:
-    """Bulk-fetch tag + library metadata for the matched IDs and build the
-    enriched response objects. One SQL query regardless of N."""
+    """Bulk-fetch tag + library + style metadata for the matched IDs and
+    build the enriched response objects. Two SQL queries regardless of N."""
     if not matches:
         return []
     ids = [m.track_id for m in matches]
     rows = db.get_tracks_by_ids(ids)
+    styles_by_id = db.get_styles_by_ids(ids)
     out: list[MatchOut] = []
     for m in matches:
         row = rows.get(m.track_id) or {}
@@ -134,6 +148,7 @@ def _enrich_matches(db: Database, matches) -> list[MatchOut]:
                 album=row.get("album"),
                 title=row.get("title"),
                 track_number=row.get("track_number"),
+                styles=_styles_to_schema(styles_by_id.get(m.track_id, [])),
             )
         )
     return out
@@ -188,6 +203,25 @@ def list_tracks(
     danceability_max: Optional[float] = Query(None),
     loudness_min: Optional[float] = Query(None),
     loudness_max: Optional[float] = Query(None),
+    styles: Optional[list[str]] = Query(
+        None,
+        description=(
+            "Filter by Discogs-400 style. Repeat the param to pass several. "
+            "Use ``Genre---Style`` for an exact match (e.g. "
+            "``Electronic---House``) or just the genre prefix "
+            "(e.g. ``Electronic``) to match the whole branch."
+        ),
+    ),
+    style_min_probability: float = Query(
+        0.0, ge=0.0, le=1.0,
+        description=(
+            "Minimum classifier probability the matched style row must have."
+        ),
+    ),
+    style_match: str = Query(
+        "any", pattern="^(any|all)$",
+        description="``any`` (default) or ``all`` of the requested styles.",
+    ),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     order_by: str = Query("id", pattern="^(id|path|bpm|duration|analyzed_at)$"),
@@ -202,12 +236,16 @@ def list_tracks(
         danceability_max=danceability_max,
         loudness_min=loudness_min,
         loudness_max=loudness_max,
+        styles=styles,
+        style_min_probability=style_min_probability,
+        style_match=style_match,
     )
     rows, total = db.list_tracks(
         filter=f, model=model, limit=limit, offset=offset, order_by=order_by
     )
+    styles_by_id = db.get_styles_by_ids([int(r["id"]) for r in rows])
     return TrackList(
-        items=[_row_to_summary(r) for r in rows],
+        items=[_row_to_summary(r, styles_by_id.get(int(r["id"]))) for r in rows],
         total=total,
         limit=limit,
         offset=offset,
@@ -237,7 +275,8 @@ def lookup_track(
     )
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no matching track")
-    return Track(**row)
+    styles = db.get_track_styles(int(row["id"]))
+    return Track(**row, styles=_styles_to_schema(styles))
 
 
 @api_router.get("/tracks/{track_id}", response_model=Track)
@@ -245,7 +284,8 @@ def get_track(track_id: int, db: Database = Depends(get_db)) -> Track:
     row = db.get_track_by_id(track_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"track {track_id} not found")
-    return Track(**row)
+    styles = db.get_track_styles(track_id)
+    return Track(**row, styles=_styles_to_schema(styles))
 
 
 @api_router.get("/tracks/{track_id}/similar", response_model=SimilarResult)
@@ -262,6 +302,9 @@ def similar_to(
     danceability_max: Optional[float] = Query(None),
     loudness_min: Optional[float] = Query(None),
     loudness_max: Optional[float] = Query(None),
+    styles: Optional[list[str]] = Query(None),
+    style_min_probability: float = Query(0.0, ge=0.0, le=1.0),
+    style_match: str = Query("any", pattern="^(any|all)$"),
     include_self: bool = Query(False),
 ) -> SimilarResult:
     f = TrackFilter(
@@ -273,6 +316,9 @@ def similar_to(
         danceability_max=danceability_max,
         loudness_min=loudness_min,
         loudness_max=loudness_max,
+        styles=styles,
+        style_min_probability=style_min_probability,
+        style_match=style_match,
     )
     try:
         matches = find_similar_to_id(
@@ -283,6 +329,29 @@ def similar_to(
     return SimilarResult(
         query_id=track_id,
         matches=_enrich_matches(db, matches),
+    )
+
+
+@api_router.get("/styles", response_model=StyleList)
+def list_styles(
+    db: Database = Depends(get_db),
+    min_probability: float = Query(
+        0.0, ge=0.0, le=1.0,
+        description=(
+            "Only count style rows whose probability is at least this high. "
+            "0 (default) returns every style any track was tagged with."
+        ),
+    ),
+) -> StyleList:
+    """Enumerate every Discogs-400 style currently present in the database.
+
+    Useful for building a UI of available filters and for sanity-checking
+    the classifier's distribution across the library.
+    """
+    rows = db.list_styles(min_probability=min_probability)
+    return StyleList(
+        items=[StyleEnumeration(**r) for r in rows],
+        total=len(rows),
     )
 
 

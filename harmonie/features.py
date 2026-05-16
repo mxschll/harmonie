@@ -3,7 +3,11 @@
 Each backend produces, for one audio file:
 
 * a fixed-length embedding (``np.ndarray`` of float32) for similarity search,
-* a :class:`Descriptors` block of musical metadata (BPM, key, loudness, …).
+* a :class:`Descriptors` block of musical metadata (BPM, key, loudness, …),
+* (effnet only) a 400-d Discogs style activation vector — the genre/style
+  classifier head that runs on top of the same Effnet embeddings, so it adds
+  almost no extra cost. ``None`` for backends that don't produce embeddings
+  in Discogs-Effnet space.
 
 Backends:
 
@@ -16,7 +20,8 @@ Backends:
 
 Two extraction modes are supported per backend:
 
-* :meth:`Extractor.extract` returns embedding + descriptors (full work).
+* :meth:`Extractor.extract` returns embedding + descriptors + styles
+  (full work).
 * :meth:`Extractor.extract_descriptors` returns descriptors only, skipping
   the model. Used to top up rows on a descriptor-version bump without
   re-running TensorFlow.
@@ -24,6 +29,7 @@ Two extraction modes are supported per backend:
 
 from __future__ import annotations
 
+import json
 import logging
 import urllib.request
 from dataclasses import asdict, dataclass, field
@@ -62,6 +68,30 @@ EFFNET_OUTPUT_NODE = "PartitionedCall:1"
 DESCRIPTOR_SAMPLE_RATE = 44100
 
 
+# Genre/style classifier head — runs on the 1280-d Effnet embeddings (no
+# extra audio decoding) and outputs probabilities for 400 Discogs styles.
+# Labels are formatted as ``"Genre---Style"``, e.g. ``"Electronic---House"``.
+GENRE_HEAD_MODEL_URL = (
+    "https://essentia.upf.edu/models/classification-heads/genre_discogs400/"
+    "genre_discogs400-discogs-effnet-1.pb"
+)
+GENRE_HEAD_MODEL_FILENAME = "genre_discogs400-discogs-effnet-1.pb"
+GENRE_HEAD_LABELS_URL = (
+    "https://essentia.upf.edu/models/classification-heads/genre_discogs400/"
+    "genre_discogs400-discogs-effnet-1.json"
+)
+GENRE_HEAD_LABELS_FILENAME = "genre_discogs400-discogs-effnet-1.json"
+GENRE_NUM_CLASSES = 400
+GENRE_HEAD_INPUT_NODE = "serving_default_model_Placeholder"
+GENRE_HEAD_OUTPUT_NODE = "PartitionedCall:0"
+
+# Top-K + threshold for the per-track ``track_styles`` rows the DB keeps for
+# fast filtering. The full 400-d vector is also stored as a BLOB so consumers
+# that want the long tail can still reach it.
+STYLE_TOP_K = 10
+STYLE_MIN_PROB = 0.05
+
+
 # ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
@@ -93,6 +123,9 @@ class TrackFeatures:
     duration: float  # seconds
     model: str
     descriptors: Descriptors = field(default_factory=Descriptors)
+    # Discogs-400 style probabilities, shape (400,) float32, post-sigmoid.
+    # ``None`` for backends that don't produce Effnet-compatible embeddings.
+    style_activations: Optional[np.ndarray] = None
 
     @property
     def dim(self) -> int:
@@ -150,6 +183,60 @@ def ensure_effnet_model() -> Path:
     if not path.exists():
         _download(EFFNET_MODEL_URL, path)
     return path
+
+
+def ensure_genre_head_model() -> Path:
+    """Download (once) the 400-style classifier head that runs on top of the
+    Effnet embeddings."""
+    path = _model_cache_dir() / GENRE_HEAD_MODEL_FILENAME
+    if not path.exists():
+        _download(GENRE_HEAD_MODEL_URL, path)
+    return path
+
+
+def ensure_genre_labels() -> list[str]:
+    """Return the 400 ``"Genre---Style"`` labels in the order produced by the
+    classifier head. Cached on disk alongside the model."""
+    path = _model_cache_dir() / GENRE_HEAD_LABELS_FILENAME
+    if not path.exists():
+        _download(GENRE_HEAD_LABELS_URL, path)
+    with open(path) as f:
+        meta = json.load(f)
+    classes = meta.get("classes")
+    if not isinstance(classes, list) or len(classes) != GENRE_NUM_CLASSES:
+        raise ValueError(
+            f"unexpected genre head metadata: expected {GENRE_NUM_CLASSES} "
+            f"classes, got {len(classes) if isinstance(classes, list) else '?'}"
+        )
+    return [str(c) for c in classes]
+
+
+def top_styles(
+    activations: np.ndarray,
+    labels: list[str],
+    *,
+    top_k: int = STYLE_TOP_K,
+    min_prob: float = STYLE_MIN_PROB,
+) -> list[tuple[str, float]]:
+    """Return the highest-confidence ``(label, probability)`` pairs.
+
+    Up to ``top_k`` entries; entries below ``min_prob`` are dropped. The list
+    is ordered by descending probability so callers can stream a fixed-size
+    preview without a second sort. Always at most ``top_k`` rows even when
+    every activation is above the threshold."""
+    if activations.shape != (GENRE_NUM_CLASSES,):
+        raise ValueError(
+            f"expected activation vector of shape ({GENRE_NUM_CLASSES},), "
+            f"got {activations.shape}"
+        )
+    order = np.argsort(-activations)[:top_k]
+    out: list[tuple[str, float]] = []
+    for idx in order:
+        prob = float(activations[idx])
+        if prob < min_prob:
+            break
+        out.append((labels[int(idx)], prob))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +298,24 @@ def compute_descriptors(audio: np.ndarray) -> Descriptors:
 
 
 class EffnetExtractor:
-    """1280-d Discogs-Effnet embedding + classical descriptors."""
+    """1280-d Discogs-Effnet embedding + classical descriptors + 400-style
+    activation vector.
+
+    The genre head is optional. If its model file isn't cached and can't be
+    downloaded, extraction degrades gracefully — embeddings + descriptors
+    still come back, and ``TrackFeatures.style_activations`` is ``None``.
+    """
 
     name = "discogs-effnet-bs64-1"
     dim = EFFNET_EMBEDDING_DIM
 
-    def __init__(self, model_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        model_path: Optional[Path] = None,
+        *,
+        genre_head_path: Optional[Path] = None,
+        load_genre_head: bool = True,
+    ) -> None:
         try:
             from essentia.standard import (
                 MonoLoader,
@@ -237,6 +336,34 @@ class EffnetExtractor:
             graphFilename=str(model_path),
             output=EFFNET_OUTPUT_NODE,
         )
+
+        # Genre head + label table. Loaded lazily so a network blip during
+        # head download doesn't kill the worker — we just log and fall back.
+        self._genre_head = None
+        self._genre_labels: Optional[list[str]] = None
+        if load_genre_head:
+            try:
+                from essentia.standard import TensorflowPredict2D
+
+                if genre_head_path is None:
+                    genre_head_path = ensure_genre_head_model()
+                self._genre_head = TensorflowPredict2D(
+                    graphFilename=str(genre_head_path),
+                    input=GENRE_HEAD_INPUT_NODE,
+                    output=GENRE_HEAD_OUTPUT_NODE,
+                )
+                self._genre_labels = ensure_genre_labels()
+            except Exception as e:  # pragma: no cover
+                logger.warning(
+                    "genre head unavailable; tracks will be indexed without "
+                    "style activations (%s)", e,
+                )
+                self._genre_head = None
+                self._genre_labels = None
+
+    @property
+    def genre_labels(self) -> Optional[list[str]]:
+        return self._genre_labels
 
     def _load_44k(self, path: Path) -> np.ndarray:
         audio = self._MonoLoader(
@@ -263,11 +390,34 @@ class EffnetExtractor:
             raise ValueError(f"unexpected embedding shape {emb_frames.shape}")
         emb = emb_frames.mean(axis=0).astype(np.float32, copy=False)
 
+        # Style activations: run the head on each per-frame embedding, then
+        # average the per-frame probabilities. Sigmoid-of-mean ≠ mean-of-
+        # sigmoids, so this is meaningfully different from "head(mean(emb))".
+        style_activations: Optional[np.ndarray] = None
+        if self._genre_head is not None:
+            try:
+                act_frames = self._genre_head(emb_frames)
+                if (
+                    act_frames.ndim != 2
+                    or act_frames.shape[1] != GENRE_NUM_CLASSES
+                ):
+                    raise ValueError(
+                        f"unexpected genre head output shape {act_frames.shape}"
+                    )
+                style_activations = act_frames.mean(axis=0).astype(
+                    np.float32, copy=False
+                )
+            except Exception as e:  # pragma: no cover
+                logger.warning(
+                    "style classification failed for %s: %s", path, e,
+                )
+
         return TrackFeatures(
             embedding=emb,
             duration=duration,
             model=self.name,
             descriptors=descriptors,
+            style_activations=style_activations,
         )
 
     def extract_descriptors(self, path: Path) -> tuple[Descriptors, float]:

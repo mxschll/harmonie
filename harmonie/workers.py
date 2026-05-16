@@ -17,6 +17,7 @@ from .features import (
     TrackFeatures,
     file_signature,
     get_extractor,
+    top_styles,
 )
 from .tags import Tags, extract_tags
 
@@ -53,6 +54,12 @@ class FullResult:
     descriptors: Descriptors
     descriptor_version: int
     tags: Tags
+    # Optional Discogs-400 style data. Worker computes both the full
+    # activation vector (stored as BLOB) and a top-K (label, prob) preview
+    # (stored as rows in track_styles). Both ``None`` if the genre head was
+    # unavailable or the backend doesn't produce Effnet-compatible embeddings.
+    style_activations: Optional[np.ndarray] = None
+    top_styles: Optional[list[tuple[str, float]]] = None
 
 
 @dataclass
@@ -94,6 +101,12 @@ def _do_full(job: FullJob) -> Result:
     assert _extractor is not None
     try:
         feats: TrackFeatures = _extractor.extract(Path(job.path))
+        # Build the top-K preview here so the analyzer just splats it into
+        # the DB without needing to know about labels.
+        styles: Optional[list[tuple[str, float]]] = None
+        labels = getattr(_extractor, "genre_labels", None)
+        if feats.style_activations is not None and labels:
+            styles = top_styles(feats.style_activations, labels)
         return FullResult(
             path=job.path,
             size=job.size,
@@ -104,6 +117,8 @@ def _do_full(job: FullJob) -> Result:
             descriptors=feats.descriptors,
             descriptor_version=DESCRIPTOR_VERSION,
             tags=extract_tags(Path(job.path)),
+            style_activations=feats.style_activations,
+            top_styles=styles,
         )
     except Exception as e:
         return JobError(path=job.path, error=repr(e))

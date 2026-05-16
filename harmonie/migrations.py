@@ -81,6 +81,12 @@ _M001_STATEMENTS = [
         album                 TEXT,
         title                 TEXT,
         track_number          INTEGER,
+        -- Full 400-d Discogs style activation vector (float32 BLOB) from
+        -- the genre classifier head. Top-K labels broken out into the
+        -- track_styles table for fast filtering. NULL = no styles extracted
+        -- (e.g. musicextractor backend, or the head was unavailable at
+        -- scan time).
+        style_activations     BLOB,
         analyzed_at           REAL    NOT NULL
     )
     """,
@@ -94,6 +100,19 @@ _M001_STATEMENTS = [
     # Composite NOCASE index for the /tracks/lookup endpoint's tag triple.
     "CREATE INDEX idx_tracks_artist_album_title "
     "ON tracks(artist COLLATE NOCASE, album COLLATE NOCASE, title COLLATE NOCASE)",
+    # Top-K style probabilities per track. Lookup by style is the common
+    # filter direction; lookup by track is used to enrich track responses.
+    """
+    CREATE TABLE track_styles (
+        track_id     INTEGER NOT NULL,
+        style        TEXT    NOT NULL,
+        probability  REAL    NOT NULL,
+        PRIMARY KEY (track_id, style),
+        FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+    )
+    """,
+    "CREATE INDEX idx_track_styles_style ON track_styles(style)",
+    "CREATE INDEX idx_track_styles_prob  ON track_styles(style, probability DESC)",
 ]
 
 

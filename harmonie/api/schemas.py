@@ -12,6 +12,22 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 
+class StyleScore(BaseModel):
+    """One Discogs-400 style classification with its probability."""
+
+    style: str = Field(
+        ...,
+        description=(
+            "Discogs-400 label, formatted as ``Genre---Style`` "
+            "(e.g. ``Electronic---House``)."
+        ),
+    )
+    probability: float = Field(
+        ..., ge=0.0, le=1.0,
+        description="Sigmoid output from the classifier head.",
+    )
+
+
 class TrackSummary(BaseModel):
     """Lightweight track row used in list responses."""
 
@@ -32,6 +48,9 @@ class TrackSummary(BaseModel):
     scale: Optional[str] = None
     danceability: Optional[float] = None
     loudness_db: Optional[float] = None
+    # Top Discogs-400 style activations, highest first. Empty list when the
+    # track was indexed without the genre classifier head.
+    styles: list[StyleScore] = Field(default_factory=list)
 
 
 class Track(TrackSummary):
@@ -68,6 +87,47 @@ class FilterParams(BaseModel):
     danceability_max: Optional[float] = None
     loudness_min: Optional[float] = None
     loudness_max: Optional[float] = None
+    # Discogs-400 style filter. Each entry is either a full ``Genre---Style``
+    # label (exact match) or a bare genre like ``Electronic`` (prefix match,
+    # so ``Electronic`` matches ``Electronic---House``,
+    # ``Electronic---Techno``, …).
+    styles: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Restrict to tracks whose top styles include any of these. "
+            "Use ``Genre---Style`` for an exact match or a bare ``Genre`` "
+            "to match the whole branch."
+        ),
+    )
+    style_min_probability: float = Field(
+        0.0, ge=0.0, le=1.0,
+        description=(
+            "Minimum classifier probability the matching style row must "
+            "have to count. 0 = any top-K hit; raise to demand confidence."
+        ),
+    )
+    style_match: str = Field(
+        "any",
+        pattern="^(any|all)$",
+        description=(
+            "``any``: track must match at least one requested style "
+            "(default). ``all``: every requested style must be present."
+        ),
+    )
+
+
+class StyleEnumeration(BaseModel):
+    """One row of GET /styles output."""
+
+    style: str
+    track_count: int
+    mean_probability: float
+    max_probability: float
+
+
+class StyleList(BaseModel):
+    items: list[StyleEnumeration]
+    total: int
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +150,7 @@ class MatchOut(BaseModel):
     album: Optional[str] = None
     title: Optional[str] = None
     track_number: Optional[int] = None
+    styles: list[StyleScore] = Field(default_factory=list)
 
 
 class SimilarResult(BaseModel):

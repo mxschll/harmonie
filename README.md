@@ -3,7 +3,7 @@
 [![Tests](https://github.com/mxschll/harmonie/actions/workflows/tests.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests.yml)
 [![Docker](https://github.com/mxschll/harmonie/actions/workflows/docker.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/docker.yml)
 
-Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate) and reads the file's tags (artist, album, title, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/), stores everything in SQLite, and exposes an HTTP API for similarity queries and playlist generation.
+Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate), classifies each track against the 400 Discogs styles (House, Techno, Trap, Punk, …), and reads the file's tags (artist, album, title, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/). Everything is stored in SQLite, and exposed via an HTTP API for similarity queries, style-filtered listings, and playlist generation.
 
 The default backend is Essentia's **Discogs-Effnet** model — a 1280-d embedding trained on Discogs tags that's well suited to music similarity. A lighter `MusicExtractor` backend is available for hosts without TensorFlow.
 
@@ -79,6 +79,7 @@ All endpoints are versioned under `/api/v1/`. If `HARMONIE_API_KEY` is set, ever
 | `GET`  | `/api/v1/tracks/{id}` | Full track record |
 | `GET`  | `/api/v1/tracks/{id}/similar` | Top-N similar tracks |
 | `POST` | `/api/v1/tracks/lookup` | Find a single track by `path` and/or tags |
+| `GET`  | `/api/v1/styles` | Enumerate Discogs-400 styles in the library |
 | `POST` | `/api/v1/playlists` | Build a playlist (mode implicit from parameters) |
 
 OpenAPI docs are served at `/docs` (Swagger UI) and `/openapi.json`.
@@ -114,10 +115,42 @@ Both `/tracks` and `/tracks/{id}/similar` accept the same set of optional descri
 
 ```
 bpm_min, bpm_max, key (repeatable), scale,
-danceability_min, danceability_max, loudness_min, loudness_max
+danceability_min, danceability_max, loudness_min, loudness_max,
+styles (repeatable), style_min_probability, style_match
 ```
 
 For playlist endpoints the same set is in the body under `filter`.
+
+### Styles
+
+During scan, harmonie runs Essentia's Discogs-400 classifier head on the same Effnet embeddings used for similarity. Each track gets a 400-dimensional probability vector over Discogs styles like `Electronic---House`, `Hip Hop---Trap`, or `Rock---Punk`. The top 10 (and any above 5% probability) are stored as filterable rows; the full vector is kept as a BLOB for clustering.
+
+Filter by exact label or by a bare genre to match the whole branch:
+
+```bash
+# Exact: just House tracks.
+curl 'http://localhost:8842/api/v1/tracks?styles=Electronic---House'
+
+# Prefix: every Electronic style the model knows.
+curl --get 'http://localhost:8842/api/v1/tracks' --data-urlencode 'styles=Electronic'
+
+# Several at once. Default match is "any"; pass style_match=all for an
+# intersection.
+curl --get 'http://localhost:8842/api/v1/tracks' \
+  --data-urlencode 'styles=Electronic---House' \
+  --data-urlencode 'styles=Electronic---Techno'
+
+# Demand confidence — only count style rows above 0.5 probability.
+curl 'http://localhost:8842/api/v1/tracks?styles=Electronic&style_min_probability=0.5'
+```
+
+`GET /styles` enumerates every style currently present in the database, with track counts and confidence stats:
+
+```bash
+curl 'http://localhost:8842/api/v1/styles?min_probability=0.5'
+```
+
+Useful for building a UI of available filters and for inspecting how confident the model is across your library.
 
 ### Playlists
 
