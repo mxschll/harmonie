@@ -26,6 +26,12 @@ from .workers import (
 logger = logging.getLogger("harmonie.analyzer")
 
 
+class _ScanCancelled(Exception):
+    """Raised internally by :meth:`Analyzer._run_scan` when the cancel
+    flag is set. Caught by ``_run_scan`` itself to record the cancelled
+    state in the scans table; never propagates out."""
+
+
 # ---------------------------------------------------------------------------
 # Status types
 # ---------------------------------------------------------------------------
@@ -98,6 +104,9 @@ class Analyzer:
         self.pool: WorkerPool | None = None
         self.status = ScanStatus()
         self._scan_lock = threading.Lock()
+        # Set by request_cancel(). Checked at phase boundaries and inside
+        # the result loop so a long scan can be aborted promptly.
+        self._cancel_event = threading.Event()
 
     # -- lifecycle -----------------------------------------------------
 
@@ -109,7 +118,29 @@ class Analyzer:
                 log_level=self.settings.log_level,
             )
 
+    def request_cancel(self) -> bool:
+        """Ask the running scan to wind down. The result loop breaks out
+        on the next iteration and the pool is terminated so workers stuck
+        on slow I/O (CIFS, NFS) abort instead of waiting.
+
+        Returns True if a scan was active, False if no-op.
+        """
+        if self.status.state != "scanning":
+            return False
+        logger.warning("scan cancellation requested")
+        self._cancel_event.set()
+        if self.pool is not None:
+            try:
+                self.pool.terminate()
+            except Exception:  # pragma: no cover
+                logger.exception("failed to terminate worker pool")
+            self.pool = None
+        return True
+
     def stop(self) -> None:
+        """Shutdown the analyzer. Cancels any in-flight scan, then closes
+        the pool and DB."""
+        self.request_cancel()
         if self.pool is not None:
             self.pool.close()
             self.pool = None
@@ -138,6 +169,8 @@ class Analyzer:
             started_at=time.time(),
         )
         t0 = time.monotonic()
+        # Reset cancellation state for this scan.
+        self._cancel_event.clear()
 
         # Persist a 'running' scan row up front; we'll fill it in on
         # success or failure via finish_scan in the finally branch.
@@ -228,12 +261,26 @@ class Analyzer:
                 if self.pool is None:
                     self.start()
                 assert self.pool is not None
-                for result in self.pool.map(all_jobs, chunksize=1):
-                    self._handle_result(result, reachable_roots=reachable)
+                try:
+                    for result in self.pool.map(all_jobs, chunksize=1):
+                        if self._cancel_event.is_set():
+                            break
+                        self._handle_result(result, reachable_roots=reachable)
+                except Exception as exc:
+                    # Cancellation terminates the pool, which causes
+                    # imap_unordered to raise. Treat that as a clean
+                    # cancel rather than a crash.
+                    if self._cancel_event.is_set():
+                        logger.debug("ignoring pool error after cancel: %r", exc)
+                    else:
+                        raise
+                if self._cancel_event.is_set():
+                    raise _ScanCancelled()
 
             # Prune rows for files that disappeared, scoped to the roots
-            # we actually walked.
-            if reachable:
+            # we actually walked. Skipped on cancel since the file list
+            # may be incomplete.
+            if reachable and not self._cancel_event.is_set():
                 self.status.phase = "pruning"
                 present = {str(f) for f in files}
                 removed = self.db.prune_missing_under_roots(
@@ -242,8 +289,19 @@ class Analyzer:
                 self.status.removed = removed
                 if removed:
                     logger.info("pruned %d removed track(s)", removed)
-            else:
+            elif not reachable:
                 logger.warning("no reachable libraries this scan; skipping prune")
+        except _ScanCancelled:
+            scan_state = "cancelled"
+            scan_last_error = "cancelled by user"
+            self.status.last_error = scan_last_error
+            logger.warning("scan cancelled by user")
+        except KeyboardInterrupt:
+            scan_state = "cancelled"
+            scan_last_error = "cancelled by user (KeyboardInterrupt)"
+            self.status.last_error = scan_last_error
+            logger.warning("scan cancelled by user (KeyboardInterrupt)")
+            raise
         except Exception as exc:
             scan_state = "crashed"
             scan_last_error = repr(exc)

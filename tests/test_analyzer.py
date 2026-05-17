@@ -322,3 +322,139 @@ def test_crashed_scan_persists_state_and_error(tmp_path, monkeypatch):
         assert rows[0]["finished_at"] is not None
     finally:
         analyzer.stop()
+
+
+# ---------------------------------------------------------------------------
+# Cancellation
+# ---------------------------------------------------------------------------
+
+
+class TestCancel:
+    def test_request_cancel_is_noop_when_idle(self, harness):
+        analyzer, _ = harness
+        assert analyzer.request_cancel() is False
+
+    def test_cancel_breaks_out_of_result_loop(self, tmp_path: Path, monkeypatch):
+        """A scan that's mid-iteration over the worker pool must stop
+        as soon as request_cancel() is called."""
+        from harmonie.workers import FullResult
+
+        lib = tmp_path / "library"
+        lib.mkdir()
+        settings = Settings(libraries=[lib], data_dir=tmp_path)
+        analyzer = Analyzer(settings)
+
+        # Many fake files so the pool would otherwise iterate for a while.
+        files = [Path(f"/lib/{i}.flac") for i in range(50)]
+        monkeypatch.setattr(analyzer_mod, "iter_audio_files", lambda roots: iter(files))
+        monkeypatch.setattr(
+            analyzer_mod,
+            "build_jobs",
+            lambda db, files, *, model_name, force, on_progress=None: (
+                [FullJob(path=str(f), size=1, mtime=1.0) for f in files],
+                [],
+                0,
+            ),
+        )
+        monkeypatch.setattr(analyzer.db, "prune_missing_under_roots", lambda **_: 0)
+
+        results_handled: list[str] = []
+
+        # FakePool that yields one result at a time; the test calls
+        # request_cancel() after the first result has been processed.
+        class FakePool:
+            def __init__(self):
+                self.terminated = False
+
+            def map(self, jobs, *, chunksize=1):
+                for j in jobs:
+                    if self.terminated:
+                        return
+                    yield FullResult(
+                        path=j.path,
+                        size=1,
+                        mtime=1.0,
+                        duration=1.0,
+                        embedding=__import__("numpy").zeros(1280, dtype="float32"),
+                        model="m",
+                        descriptors=__import__(
+                            "harmonie.features", fromlist=["Descriptors"]
+                        ).Descriptors(
+                            bpm=120.0,
+                            bpm_confidence=0.9,
+                            key="C",
+                            scale="major",
+                            key_strength=0.8,
+                            loudness=-10.0,
+                            danceability=0.5,
+                            onset_rate=2.0,
+                        ),
+                        descriptor_version=1,
+                        tags=None,
+                        style_activations=None,
+                        top_styles=None,
+                    )
+
+            def close(self):
+                pass
+
+            def terminate(self):
+                self.terminated = True
+
+        fake_pool = FakePool()
+        analyzer.pool = fake_pool
+
+        # Patch _handle_result to call request_cancel() after the first
+        # result is processed. The next loop iteration must break.
+        original_handle = analyzer._handle_result
+
+        def handle(result, *, reachable_roots):
+            results_handled.append(result.path)
+            original_handle(result, reachable_roots=reachable_roots)
+            if len(results_handled) == 1:
+                analyzer.request_cancel()
+
+        analyzer._handle_result = handle
+
+        try:
+            analyzer.scan()
+            # Only the first result was processed; the second iteration
+            # checked the cancel flag and broke out.
+            assert len(results_handled) == 1
+            assert fake_pool.terminated is True
+            # And the scans table records the cancellation explicitly.
+            rows, _ = analyzer.db.list_scans(limit=1)
+            assert rows[0]["state"] == "cancelled"
+            assert rows[0]["last_error"] == "cancelled by user"
+        finally:
+            analyzer.stop()
+
+    def test_cancel_skips_prune(self, harness):
+        """If a scan is cancelled, prune mustn't run — the file list is
+        incomplete and we'd risk dropping rows for files that just
+        weren't enumerated yet."""
+        analyzer, _observations = harness
+        prune_calls: list[None] = []
+        analyzer.db.prune_missing_under_roots = (  # type: ignore[method-assign]
+            lambda **_: prune_calls.append(None) or 0
+        )
+
+        # Set the cancel flag before the scan starts. The flag is reset
+        # at the top of _run_scan, so we have to patch differently:
+        # patch iter_audio_files to set the flag mid-enumeration.
+        original_iter = analyzer_mod.iter_audio_files
+
+        def cancel_then_iter(roots):
+            yield from original_iter(roots)
+            analyzer._cancel_event.set()
+
+        analyzer_mod.iter_audio_files = cancel_then_iter
+        try:
+            analyzer.scan()
+        finally:
+            analyzer_mod.iter_audio_files = original_iter
+
+        # prune_missing_under_roots was never called.
+        assert prune_calls == []
+        rows, _ = analyzer.db.list_scans(limit=1)
+        assert rows[0]["state"] == "cancelled"

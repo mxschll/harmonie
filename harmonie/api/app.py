@@ -84,7 +84,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 scheduler_task.cancel()
                 with suppress(asyncio.CancelledError, Exception):
                     await scheduler_task
-            analyzer.stop()
+            # request_cancel signals workers and terminates the pool;
+            # close drains the (terminated) pool and closes the DB. Both
+            # are potentially slow so they run off the event loop —
+            # otherwise uvicorn's signal handler can't respond to a
+            # second Ctrl-C.
+            analyzer.request_cancel()
+            await asyncio.to_thread(analyzer.stop)
 
     app = FastAPI(
         title="harmonie",

@@ -323,3 +323,53 @@ class TestScans:
         body = json.loads(capsys.readouterr().out)
         assert body["total"] == 1
         assert body["items"][0]["id"] == sid
+
+
+# ---------------------------------------------------------------------------
+# Cancellation handler in cmd_scan
+# ---------------------------------------------------------------------------
+
+
+class TestCancelHandler:
+    def test_install_cancel_handler_wires_signals(self, monkeypatch):
+        """The CLI installs SIGINT/SIGTERM handlers that call
+        request_cancel on the underlying analyzer."""
+        import signal
+
+        from harmonie.cli import _install_cancel_handler
+
+        installed: dict[int, object] = {}
+
+        def fake_signal(signum, handler):
+            installed[signum] = handler
+
+        monkeypatch.setattr(signal, "signal", fake_signal)
+
+        cancelled: list[int] = []
+
+        class FakeAnalyzer:
+            def request_cancel(self) -> bool:
+                cancelled.append(1)
+                return True
+
+        analyzer = FakeAnalyzer()
+        _install_cancel_handler(analyzer)
+
+        # Both SIGINT and SIGTERM got handlers.
+        assert signal.SIGINT in installed
+        assert signal.SIGTERM in installed
+        # The handlers are the same callable (single shared function).
+        assert installed[signal.SIGINT] is installed[signal.SIGTERM]
+
+        # First call invokes request_cancel without exiting.
+        installed[signal.SIGINT](signal.SIGINT, None)
+        assert cancelled == [1]
+
+        # Second call exits immediately (via os._exit). Patch os._exit
+        # to capture the call rather than actually killing the test.
+        import os
+
+        exits: list[int] = []
+        monkeypatch.setattr(os, "_exit", lambda code: exits.append(code))
+        installed[signal.SIGINT](signal.SIGINT, None)
+        assert exits == [130]

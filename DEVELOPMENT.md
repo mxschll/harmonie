@@ -11,6 +11,7 @@ Architecture, scaling notes, and contribution workflow for harmonie. See [README
 - [Lint and format](#lint-and-format)
 - [Tests](#tests)
 - [Scan history](#scan-history)
+- [Cancellation](#cancellation)
 - [Schema migrations](#schema-migrations)
 
 ## Local setup
@@ -112,6 +113,18 @@ harmonie scans 14 --json      # same, machine-readable
 ```
 
 There is no API endpoint for scan history. Use the CLI on the host, or read the SQLite file directly.
+
+## Cancellation
+
+A scan can be aborted at any time. The mechanism is the same in three contexts:
+
+* **`harmonie scan` CLI** — Ctrl-C once cancels gracefully (workers terminated, partial results committed, scan row marked `cancelled`). Ctrl-C twice force-exits via `os._exit(130)`.
+* **`harmonie serve` graceful shutdown** — uvicorn's SIGINT handling triggers our FastAPI lifespan teardown, which calls `analyzer.request_cancel()` before `analyzer.stop()`. The pool is terminated rather than drained, so an in-flight scan with a long queue (50k+ jobs) doesn't block shutdown.
+* **Programmatically** — `analyzer.request_cancel()` sets a `threading.Event`, terminates the worker pool, and returns. The result loop in `_run_scan` checks the event each iteration and breaks out cleanly.
+
+Cancellation persists to the `scans` table as `state = 'cancelled'`, distinct from `crashed` (which means an unhandled exception). The `prune` phase is skipped on cancel because the file enumeration may be incomplete and pruning could otherwise drop rows for files that just weren't enumerated yet.
+
+The pool is terminated (`SIGTERM` to all workers) rather than closed-and-joined. Workers stuck on slow I/O — common with network mounts like CIFS or NFS — get killed instead of waited on. Any tracks in the middle of extraction at cancel time are simply lost; the next scan picks them up via the standard size+mtime incremental check.
 
 ## Schema migrations
 

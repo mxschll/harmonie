@@ -211,6 +211,16 @@ class WorkerPool:
         self._pool.join()
         self._pool = None
 
+    def terminate(self) -> None:
+        """Hard-stop all workers (SIGTERM). Use when the user has asked
+        to abort: ``close()`` would otherwise wait for in-flight kernel
+        I/O (slow CIFS reads, etc.) to finish."""
+        if self._pool is None:
+            return
+        self._pool.terminate()
+        self._pool.join()
+        self._pool = None
+
 
 # ---------------------------------------------------------------------------
 # Job-building helpers

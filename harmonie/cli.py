@@ -128,14 +128,52 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _install_cancel_handler(analyzer) -> None:
+    """Install SIGINT/SIGTERM handlers that cancel the scan on the first
+    signal and force-exit on the second. The default Python KeyboardInterrupt
+    isn't enough on its own — multiprocessing's blocking ``get()`` calls
+    don't always wake up promptly on a signal, so we explicitly call
+    :meth:`Analyzer.request_cancel` (which terminates the worker pool)
+    from inside the handler."""
+    import contextlib
+    import os
+    import signal
+
+    received = {"count": 0}
+
+    def handler(signum, frame):  # noqa: ARG001
+        received["count"] += 1
+        if received["count"] >= 2:
+            print("\nsecond signal received, exiting immediately", flush=True)
+            os._exit(130)
+        print(
+            "\ncancellation requested, finishing in-flight work... "
+            "(press Ctrl-C again to force-exit)",
+            flush=True,
+        )
+        with contextlib.suppress(Exception):
+            analyzer.request_cancel()
+
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGTERM, handler)
+
+
 def cmd_scan(args: argparse.Namespace) -> int:
     settings = get_settings()
     configure_logging(settings)
+    import contextlib
+
     from .analyzer import Analyzer
 
     analyzer = Analyzer(settings)
+    _install_cancel_handler(analyzer)
     try:
-        analyzer.scan(force=args.force)
+        # The handler above already printed the cancellation notice on
+        # Ctrl-C; the snapshot below will report what was actually
+        # completed before the abort, so swallowing KeyboardInterrupt
+        # here is fine.
+        with contextlib.suppress(KeyboardInterrupt):
+            analyzer.scan(force=args.force)
         snap = analyzer.status.snapshot()
         if args.json:
             print(json.dumps(snap, indent=2))
