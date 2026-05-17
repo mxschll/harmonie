@@ -129,8 +129,8 @@ class TestFilterBody:
         assert f.style_match == "all"
 
     def test_body_to_track_filter_isomorphic_with_url(self):
-        """The same logical filter expressed both ways resolves to the same
-        TrackFilter — that's the whole point of having two surfaces."""
+        """The same logical filter expressed via body and via URL resolves
+        to the same TrackFilter."""
         body_filter = FilterBody.model_validate(
             {"bpm": {"gte": 120, "lte": 130}, "key": ["A"]}
         ).to_track_filter()
@@ -562,8 +562,7 @@ class TestPlaylistSeedRefs:
 
 @pytest.fixture
 def client_with_api_key(tmp_path: Path, make_db):
-    """Same wiring as ``client`` but with an API key configured. Settings is
-    constructed with ``api_key`` directly so we don't need to touch env."""
+    """Same wiring as ``client`` but with an API key set on Settings."""
     db, index = make_db("api-keyed.db")
     _populate(db, "fast.flac", bpm=130)
 
@@ -580,7 +579,7 @@ def client_with_api_key(tmp_path: Path, make_db):
 
 class TestApiKeyAuth:
     def test_health_is_public_even_with_key_set(self, client_with_api_key):
-        """``/health`` must never require auth — it's the liveness probe."""
+        """``/health`` is public regardless of api_key configuration."""
         assert client_with_api_key.get("/health").status_code == 200
 
     def test_missing_key_rejected(self, client_with_api_key):
@@ -600,8 +599,8 @@ class TestApiKeyAuth:
         assert r.status_code == 200, r.text
 
     def test_no_key_required_when_unconfigured(self, client):
-        """The default ``client`` fixture has no api_key set — every route
-        should pass through unauthenticated."""
+        """When ``api_key`` is unset, requests pass through without
+        authentication."""
         c, _ = client
         assert c.get("/api/v1/status").status_code == 200
 
@@ -653,7 +652,7 @@ class TestRequestLogging:
         assert "ms)" in msg  # duration
 
     def test_health_logged_at_debug_not_info(self, logged_app, caplog):
-        """Liveness probes shouldn't drown out real traffic at INFO."""
+        """``/health`` requests are logged at DEBUG, not INFO."""
         with caplog.at_level("DEBUG", logger="harmonie.api.requests"):
             logged_app.get("/health")
         records = [
@@ -664,8 +663,7 @@ class TestRequestLogging:
         assert records[0].levelname == "DEBUG"
 
     def test_unhandled_exception_still_logged_as_500(self, logged_app, caplog):
-        """If the handler raises, the line still gets logged with status=500.
-        Lets operators see failures even when no response was constructed."""
+        """A handler raising still produces a log line with status=500."""
         with caplog.at_level("INFO", logger="harmonie.api.requests"):
             logged_app.get("/boom")
         records = [

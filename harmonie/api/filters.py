@@ -30,9 +30,7 @@ Two surfaces map to a single internal :class:`harmonie.db.TrackFilter`:
         "style_mode": "any"
       }
 
-The two shapes are isomorphic; both build the same ``TrackFilter``. Adding a
-new filterable column means one schema field plus one URL alias entry — not
-three new top-level query parameters.
+Both shapes build the same ``TrackFilter``.
 """
 
 from __future__ import annotations

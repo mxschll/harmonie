@@ -1,17 +1,15 @@
 """In-memory cache of embedding matrices for fast similarity search.
 
-The DB is the source of truth, but reading every embedding from SQLite on
-every query scales poorly. :class:`EmbeddingIndex` keeps an L2-normalised
-matrix resident in process memory; queries become a single matrix-vector
-multiply.
+The DB is the source of truth. :class:`EmbeddingIndex` keeps an
+L2-normalised matrix resident in process memory; queries become a single
+matrix-vector multiply.
 
-The cache is keyed by model name (a library that mixes models keeps separate
-matrices) and is invalidated wholesale after every scan. It rebuilds lazily
-on the next access.
+The cache is keyed by model name (a library that mixes models keeps
+separate matrices) and is invalidated wholesale after every scan. It
+rebuilds lazily on the next access.
 
-Memory: at 1280-d / float32 the matrix is roughly 5 KB per track, so 100k
-tracks ≈ 500 MB resident. Fits comfortably in modern RAM and is the price
-of fast queries.
+Memory: at 1280-d / float32 the matrix is roughly 5 KB per track; 100k
+tracks ≈ 500 MB resident.
 """
 
 from __future__ import annotations
@@ -38,8 +36,7 @@ class CachedMatrix:
     """L2-normalised embeddings for one model, plus row metadata.
 
     ``matrix[i]`` corresponds to ``ids[i]`` and ``paths[i]``. ``id_to_row``
-    is a reverse lookup so callers can find a row by track id without
-    scanning.
+    maps track id to row index.
     """
 
     ids: tuple[int, ...]
@@ -68,8 +65,7 @@ def _l2_normalize_matrix(mat: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 
 
 def l2_normalize_vec(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    """L2-normalise a 1-D vector. Public for callers that build query
-    embeddings outside the index (e.g. the multi-seed playlist centroid)."""
+    """L2-normalise a 1-D vector."""
     n = float(np.linalg.norm(v))
     return v / max(n, eps)
 
@@ -81,10 +77,7 @@ def l2_normalize_vec(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 
 class EmbeddingIndex:
     """Thread-safe cache of L2-normalised embedding matrices per model.
-
-    Build is serialised through a lock. Queries operate on the matrix object
-    they obtained from :meth:`get` and don't hold the lock — concurrent
-    queries do not block each other.
+    Build is serialised through a lock; queries don't hold the lock.
     """
 
     def __init__(self, db: Database) -> None:

@@ -113,8 +113,8 @@ def _row_to_summary(
 
 
 def _enrich_matches(db: Database, matches) -> list[MatchOut]:
-    """Bulk-fetch tag + library + style metadata for the matched IDs and
-    build the enriched response objects. Two SQL queries regardless of N."""
+    """Bulk-fetch tag, library, and style metadata for the matched IDs in
+    two SQL queries and build the enriched response objects."""
     if not matches:
         return []
     ids = [m.track_id for m in matches]
@@ -178,13 +178,8 @@ def filter_query(
         description="``any`` (default) or ``all`` of the requested styles.",
     ),
 ) -> TrackFilter:
-    """FastAPI dependency: compose a :class:`TrackFilter` from the eight
-    query-string filter parameters shared by ``GET /tracks`` and
-    ``GET /tracks/{id}/similar``.
-
-    Each ``Query(...)`` definition lives here once. FastAPI introspects
-    this dependency, so the OpenAPI document still shows every parameter
-    on the endpoints that depend on it.
+    """Compose a :class:`TrackFilter` from the eight query-string filter
+    parameters shared by ``GET /tracks`` and ``GET /tracks/{id}/similar``.
     """
     try:
         return build_track_filter(
@@ -283,14 +278,12 @@ def resolve_track(
     album: Optional[str] = Query(None),
     title: Optional[str] = Query(None),
 ) -> Track:
-    """Find one track by path and/or tags using a multi-strategy ladder.
-
-    Strategies, in order; first hit wins:
+    """Find one track by path and/or tags. Strategies, in order — first
+    hit wins:
 
     1. Exact match on absolute ``path``.
-    2. Exact match on ``relative_path`` — useful when the caller's mount
-       point differs from harmonie's view of the same library.
-    3. Case-insensitive match on the (artist, album, title) triple.
+    2. Exact match on ``relative_path`` (for mount-point mismatches).
+    3. Case-insensitive match on (artist, album, title).
     4. Case-insensitive match on (title, artist) or (title, album).
 
     400 if every parameter is missing. 404 if no strategy matches.
@@ -350,11 +343,8 @@ def list_styles(
         ),
     ),
 ) -> StyleList:
-    """Enumerate every Discogs-400 style currently present in the database.
-
-    Useful for building a UI of available filters and for sanity-checking
-    the classifier's distribution across the library.
-    """
+    """Enumerate every Discogs-400 style currently present in the
+    database."""
     rows = db.list_styles(min_probability=style_min)
     return StyleList(
         items=[StyleEnumeration(**r) for r in rows],
@@ -368,11 +358,9 @@ def list_styles(
 def _resolve_seed_refs(
     db: Database, refs: list[SeedRef]
 ) -> tuple[list[int], list[UnresolvedSeedRef]]:
-    """Resolve each ``SeedRef`` via :meth:`Database.find_track`.
-
-    Returns ``(resolved_ids, unresolved)``. Resolution is best-effort: refs
-    that don't match are reported in ``unresolved`` rather than raising,
-    so a mostly-good seed list still produces a playlist.
+    """Resolve each ``SeedRef`` via :meth:`Database.find_track`. Returns
+    ``(resolved_ids, unresolved)``; refs that don't match are returned in
+    ``unresolved`` rather than raising.
     """
     resolved: list[int] = []
     unresolved: list[UnresolvedSeedRef] = []
@@ -410,24 +398,21 @@ def make_playlist(
     """Generate a playlist. The body's ``mode`` field selects the strategy:
 
     * ``similar``: anchored on the seeds' embedding centroid.
-    * ``drift``: walk away from the seeds' centroid in chunks, re-anchoring
-      on the most recent pick each chunk.
+    * ``drift``: walks away from the seeds' centroid in chunks,
+      re-anchoring on the most recent pick each chunk.
     * ``vibe``: descriptor-driven; ``filter`` narrows the pool and
       ``target`` ranks within it.
 
-    ``similar`` and ``drift`` accept seeds either as resolved IDs in
-    ``seeds`` or as inline path/tag references in ``seed_refs`` (resolved
-    server-side using the same ladder as ``GET /tracks/resolve``). Refs
-    that don't match a track are returned in ``unresolved_seed_refs``;
-    the playlist is built from the ones that did. The request fails with
-    400 only if every supplied seed (id or ref) fails to resolve.
+    ``similar`` and ``drift`` accept seeds as resolved IDs in ``seeds``,
+    inline references in ``seed_refs``, or both. Unmatched refs are
+    returned in ``unresolved_seed_refs``. 400 if every supplied seed fails
+    to resolve.
     """
     descriptor_filter = (
         body.filter.to_track_filter() if body.filter is not None else None
     )
 
-    # Resolve any seed_refs once, up front. Vibe mode has no seeds, so
-    # this stays empty for it.
+    # Vibe mode has no seeds; resolution is a no-op for it.
     unresolved: list[UnresolvedSeedRef] = []
     if isinstance(body, (SimilarPlaylist, DriftPlaylist)):
         resolved_ids, unresolved = _resolve_seed_refs(db, body.seed_refs)
@@ -507,16 +492,14 @@ async def trigger_scan(
         ),
     ),
 ) -> ScanState:
-    """Trigger a scan in the background.
-
-    Returns the *current* scan state. If a scan is already running, this is
-    a no-op (the response will show ``state: scanning``).
+    """Trigger a scan in the background. Returns the current scan state.
+    No-op when a scan is already running.
     """
     if analyzer.status.state != "scanning":
-        # Run in thread so the API doesn't block the event loop.
+        # Run in a thread to keep the event loop free.
         asyncio.create_task(asyncio.to_thread(analyzer.scan, force=force))
-        # Yield briefly so the task picks up the lock and flips state to
-        # "scanning" before we report back.
+        # Yield so the task can acquire the scan lock and update state
+        # before we snapshot it.
         await asyncio.sleep(0)
     return ScanState(**analyzer.status.snapshot())
 

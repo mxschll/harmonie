@@ -345,8 +345,8 @@ def api_client_with_styles(tmp_path, make_db):
         top_styles_rows=[("Rock---Punk", 0.7)],
     )
 
-    # Build the app without the production lifespan so we don't spin up a
-    # real Analyzer (which would load TensorFlow and start the worker pool).
+    # Build the app without the production lifespan to skip TF and the
+    # worker pool.
     settings = Settings(libraries=[tmp_path], data_dir=tmp_path)
     app = FastAPI()
     app.include_router(public_router)

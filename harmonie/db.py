@@ -2,18 +2,18 @@
 
 Schema design notes:
 
-* Tracks are addressed by integer ``id`` (autoincrement). The path is exposed
-  as a property of the row — clients should not depend on path stability.
+* Tracks are addressed by integer ``id`` (autoincrement).
 * ``embedding`` is a contiguous ``float32`` blob; ``embedding_dim`` records
-  the length so we can reshape on read without binding to a particular model.
-* ``model`` and ``descriptor_version`` are tracked separately, so a descriptor
-  algorithm bump doesn't require re-running the embedding model. Existing rows
-  with older ``descriptor_version`` are topped up cheaply.
-* When a file disappears between scans, its row is deleted (we don't try to
-  detect moves — a moved file looks like delete+add, which is fine).
+  the length so reads can reshape it without binding to a particular model.
+* ``model`` and ``descriptor_version`` are tracked separately so a
+  descriptor algorithm bump doesn't require re-running the embedding model.
+  Rows with older ``descriptor_version`` are topped up by the descriptor
+  refresh path.
+* A file disappearing between scans deletes the row. Moves look like
+  delete + add.
 * Filter columns (bpm, key, scale, danceability, loudness) are indexed
-  individually so playlist-style range queries stay fast on large libraries.
-* WAL mode lets the analyzer write while the API serves reads.
+  individually for range queries.
+* WAL mode allows concurrent analyzer writes and API reads.
 """
 
 from __future__ import annotations
@@ -489,11 +489,7 @@ class Database:
         return None
 
     def get_tracks_by_ids(self, ids: list[int]) -> dict[int, dict]:
-        """Return ``{id: row}`` for the given IDs, in one query.
-
-        Used by route handlers to enrich similarity-search and playlist
-        results with tag and library-relative-path metadata.
-        """
+        """Return ``{id: row}`` for the given IDs in one query."""
         if not ids:
             return {}
         placeholders = ",".join("?" * len(ids))
@@ -548,13 +544,7 @@ class Database:
     def bpm_key_by_id_for_model(
         self, model: str
     ) -> dict[int, tuple[Optional[float], Optional[str], Optional[str]]]:
-        """Return ``{track_id: (bpm, key, scale)}`` for one model.
-
-        Used by playlist generators to check each candidate's descriptors
-        against the previous pick (or against the seed) without re-querying
-        the DB per candidate. Callers that only need BPM ignore the key
-        and scale columns.
-        """
+        """Return ``{track_id: (bpm, key, scale)}`` for one model."""
         cur = self._conn.execute(
             "SELECT id, bpm, key, scale FROM tracks WHERE model = ?",
             (model,),
@@ -643,8 +633,6 @@ class Database:
 
         Returns a list of ``{style, track_count, mean_probability,
         max_probability}`` dicts ordered by ``track_count`` descending.
-        Useful for building a UI of available filters and for sanity-checking
-        what the model is confident about across the library.
         """
         cur = self._conn.execute(
             """

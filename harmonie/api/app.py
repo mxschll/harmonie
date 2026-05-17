@@ -19,19 +19,18 @@ logger = logging.getLogger("harmonie.api")
 access_logger = logging.getLogger("harmonie.api.requests")
 
 
-# Liveness probes hit /health constantly; logging every one of them at INFO
-# drowns out actual API traffic. Demote those to DEBUG.
+# Paths logged at DEBUG instead of INFO. Liveness probes hit /health
+# constantly.
 _QUIET_PATHS = frozenset({"/health"})
 
 
 async def _log_requests(request: Request, call_next):
-    """Log one line per HTTP request via the harmonie.api.requests logger.
+    """Log one line per HTTP request through the ``harmonie.api.requests``
+    logger.
 
     Format: ``<client> <method> <path>[?<query>] -> <status> (<ms>ms)``.
-    Always logs, even when the handler raises — uses ``status=500`` as the
-    fallback for unhandled exceptions so callers can still see the failure.
-    Sub-logger ``harmonie.api.requests`` lets operators tune verbosity
-    independently of other harmonie logs.
+    Logs even when the handler raises, with ``status=500`` as the
+    fallback.
     """
     start = time.monotonic()
     status: int = 500
@@ -62,10 +61,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         analyzer = Analyzer(settings)
-        # Don't eagerly start the worker pool — the analyzer creates it on
-        # demand at the start of the first scan. That way the (multi-second)
-        # TF model load happens during a scan, not at app startup, and the
-        # service starts serving requests immediately.
+        # Worker pool is created on demand at the start of the first scan
+        # to avoid the multi-second TF model load at app startup.
         app.state.analyzer = analyzer
         app.state.settings = settings
 
@@ -98,7 +95,6 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Register middleware before routers so it wraps every endpoint.
     app.middleware("http")(_log_requests)
 
     if settings.cors_origins:

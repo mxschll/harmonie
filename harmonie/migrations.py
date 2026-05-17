@@ -1,28 +1,25 @@
 """Schema migrations.
 
 Append-only list of migration functions. Each takes an open
-:class:`sqlite3.Connection` and applies its DDL/DML. Migrations run in order
-on every DB open; the runner is idempotent (a no-op when the DB is already
-at the latest version).
+:class:`sqlite3.Connection` and applies its DDL/DML. Migrations run in
+order on every DB open; the runner is idempotent.
 
-The DB stores the version it has been migrated to in ``meta.schema_version``.
-A migration runs in its own transaction — a partial failure rolls back and
-leaves the DB at the previous version.
+The DB stores the version it has been migrated to in
+``meta.schema_version``. Each migration runs in its own transaction; a
+partial failure rolls back and leaves the DB at the previous version.
 
-Refusing to run a binary older than the DB is a feature: if a newer harmonie
-has migrated the DB to v5 and somebody starts an old harmonie that only
-knows about v3, that older binary doesn't know how to read v5 and may
-silently corrupt data. We fail loudly instead.
+Opening a DB at a version newer than this binary supports raises
+:class:`MigrationError`.
 
 Adding a migration:
 
 1. Write ``_migration_NNN_what_it_does(conn)`` below.
 2. Append it to :data:`MIGRATIONS`.
-3. Update any code in ``db.py`` that depends on the new shape (column lists
-   in upserts, etc.).
+3. Update any code in ``db.py`` that depends on the new shape (column
+   lists in upserts, etc.).
 
-Don't edit existing migration functions after they've shipped — they're a
-historical record. New changes are new migrations.
+Existing migration functions don't change after they've shipped. New
+changes are new migrations.
 """
 
 from __future__ import annotations

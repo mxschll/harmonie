@@ -63,8 +63,7 @@ def _open_resources():
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    """Apply pending schema migrations and exit. Useful as a separate
-    deploy step before bringing up `serve` or `scan`."""
+    """Apply pending schema migrations and exit."""
     settings = get_settings()
     configure_logging(settings)
     import sqlite3

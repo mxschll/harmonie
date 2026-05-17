@@ -1,12 +1,7 @@
 """Audio tag extraction (ID3, Vorbis comments, MP4 atoms) via mutagen.
 
-Tags are not "features" in the Essentia sense — they're file metadata set by
-the user (or their tagger). We read them so external clients can match
-harmonie tracks back to their own catalog without doing a full filesystem
-walk: artist + album + title + track number is good enough for the long tail.
-
-The extractor is defensive: any failure inside mutagen returns an empty
-:class:`Tags`. Tag extraction must never abort a scan.
+Tags are file metadata. Extraction is best-effort: any failure inside
+mutagen returns an empty :class:`Tags` so a tag error never aborts a scan.
 """
 
 from __future__ import annotations
@@ -21,7 +16,7 @@ logger = logging.getLogger("harmonie.tags")
 
 @dataclass
 class Tags:
-    """Subset of audio tags useful for matching against external catalogs."""
+    """Subset of audio tags read by harmonie."""
 
     artist: Optional[str] = None
     album: Optional[str] = None

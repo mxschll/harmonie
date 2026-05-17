@@ -54,10 +54,9 @@ class FullResult:
     descriptors: Descriptors
     descriptor_version: int
     tags: Tags
-    # Optional Discogs-400 style data. Worker computes both the full
-    # activation vector (stored as BLOB) and a top-K (label, prob) preview
-    # (stored as rows in track_styles). Both ``None`` if the genre head was
-    # unavailable or the backend doesn't produce Effnet-compatible embeddings.
+    # Full 400-d Discogs activation vector and the top-K (label, prob)
+    # preview. Both ``None`` if the genre head was unavailable or the
+    # backend doesn't produce Effnet-compatible embeddings.
     style_activations: Optional[np.ndarray] = None
     top_styles: Optional[list[tuple[str, float]]] = None
 
@@ -90,20 +89,24 @@ _backend_name = ""
 
 
 def _worker_init(backend: str, log_level: str = "INFO") -> None:
-    """Run once per worker process. Loads the model into a process global.
-
-    Also silences Essentia's noisy ``[WARNING] No network created, or last
-    created network has been deleted`` line that fires every time the
-    standard-mode TF wrapper destroys its internal streaming network.
-    The warning is harmless but printed once per track. Real extraction
-    failures still surface as :class:`JobError` results from
-    :func:`_do_full` / :func:`_do_descriptors`, so we don't lose signal.
-    DEBUG-level deployments keep Essentia's warnings on for diagnostics.
+    """Run once per worker process. Loads the backend, configures logging,
+    and (for non-DEBUG levels) silences Essentia's
+    ``[WARNING] No network created, or last created network has been
+    deleted`` line that fires when the standard-mode TF wrapper destroys
+    its internal streaming network.
     """
     global _extractor, _backend_name
-    # Quiet TF in workers.
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
     _backend_name = backend
+
+    # Spawn-mode workers don't inherit Python state from the parent, so
+    # logging has to be configured here. Format matches the main
+    # process's :func:`harmonie.config.configure_logging`.
+    logging.basicConfig(
+        level=log_level.upper(),
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
 
     if log_level.upper() != "DEBUG":
         try:
@@ -118,10 +121,9 @@ def _worker_init(backend: str, log_level: str = "INFO") -> None:
 
 def _do_full(job: FullJob) -> WorkerResult:
     assert _extractor is not None
+    logger.info("extracting: %s", job.path)
     try:
         feats: TrackFeatures = _extractor.extract(Path(job.path))
-        # Build the top-K preview here so the analyzer just splats it into
-        # the DB without needing to know about labels.
         styles: Optional[list[tuple[str, float]]] = None
         labels = getattr(_extractor, "genre_labels", None)
         if feats.style_activations is not None and labels:
@@ -145,6 +147,7 @@ def _do_full(job: FullJob) -> WorkerResult:
 
 def _do_descriptors(job: DescriptorJob) -> WorkerResult:
     assert _extractor is not None
+    logger.info("refreshing descriptors: %s", job.path)
     try:
         descriptors, duration = _extractor.extract_descriptors(Path(job.path))
         return DescriptorResult(
@@ -170,9 +173,8 @@ def _dispatch(job: Union[FullJob, DescriptorJob]) -> WorkerResult:
 
 
 class WorkerPool:
-    """Thin wrapper around multiprocessing.Pool that streams results back via
-    ``imap_unordered`` so the orchestrator can write to the DB as work
-    completes rather than waiting for the whole batch."""
+    """Wrapper around :class:`multiprocessing.Pool` that streams results
+    back via ``imap_unordered``."""
 
     def __init__(
         self, *, backend: str, workers: int, log_level: str = "INFO",
@@ -213,16 +215,11 @@ def build_jobs(
     db, files: list[Path], *, model_name: str, force: bool,
     on_progress: Optional[Callable[[int], None]] = None,
 ) -> tuple[list[FullJob], list[DescriptorJob], int]:
-    """Decide which files need a full analysis vs. just a descriptor refresh.
+    """Decide which files need a full analysis vs. a descriptor refresh.
 
-    Returns (full_jobs, descriptor_jobs, skipped_count). Files that don't exist
-    or can't be stat'd are silently dropped.
-
-    ``on_progress`` is invoked with the running count after every file. The
-    classification step issues one ``os.stat`` per file, which on slow network
-    mounts can take as long as enumeration itself; the callback lets the
-    analyzer log progress and update its public scan status without
-    block-awaiting the whole loop.
+    Returns ``(full_jobs, descriptor_jobs, skipped_count)``. Files that
+    don't exist or can't be stat'd are silently dropped. ``on_progress``
+    is invoked with the running count after every file.
     """
     full_jobs: list[FullJob] = []
     desc_jobs: list[DescriptorJob] = []

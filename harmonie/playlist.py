@@ -17,7 +17,7 @@ from .index import EmbeddingIndex, l2_normalize_vec
 
 
 # ---------------------------------------------------------------------------
-# Result type (kept distinct from index.IndexMatch to decouple the public API)
+# Result type
 # ---------------------------------------------------------------------------
 
 
@@ -32,8 +32,8 @@ class Match:
 # Camelot wheel (DJ harmonic-mixing chart)
 # ---------------------------------------------------------------------------
 
-# Map (key, scale) -> Camelot code. Both sharp and flat spellings are
-# registered so we don't depend on which Essentia profile produced the key.
+# Map (key, scale) -> Camelot code. Sharp and flat spellings both
+# registered.
 _CAMELOT: dict[tuple[str, str], str] = {
     ("Ab", "minor"): "1A",  ("G#", "minor"): "1A",
     ("B",  "major"): "1B",
@@ -307,18 +307,15 @@ def generate_chained_playlist(
                 Match(track_id=sid, path=cached.paths[idx], score=1.0)
             )
 
-    # Centroid of the seed embeddings — used as the starting anchor. With
-    # one seed this collapses to that seed's vector. The anchor is L2-
-    # normalized so the cosine math downstream stays numerically clean.
+    # L2-normalized centroid of the seed embeddings, used as the starting
+    # anchor. Collapses to the single seed's vector when there's one seed.
     anchor_emb = cached.matrix[seed_indices].mean(axis=0)
     anchor_emb = l2_normalize_vec(
         anchor_emb.astype(np.float32, copy=False)
     )
 
-    # `prev_*` track the immediately previous pick for consecutive-transition
-    # checks. They start at the FIRST seed (same convention as the
-    # similar-mode generator). Once the walk picks a track, prev_* updates
-    # to that pick so consecutive-pair checks fire correctly.
+    # Consecutive-transition baseline starts at the first seed. Updates to
+    # the most recent pick after each iteration.
     first_seed = seed_rows[0]
     prev_bpm: Optional[float] = first_seed.get("bpm")
     prev_key: Optional[str] = first_seed.get("key")

@@ -101,9 +101,8 @@ class StyleList(BaseModel):
 
 
 class MatchOut(BaseModel):
-    """A similarity-search or playlist hit, enriched with the metadata an
-    external client needs to map it back to its own catalog without doing
-    a filesystem walk."""
+    """A similarity-search or playlist hit, enriched with tag and
+    library-relative metadata."""
 
     track_id: int
     path: str
@@ -129,11 +128,7 @@ class SimilarResult(BaseModel):
 
 class SeedRef(BaseModel):
     """Reference to a track by path or tags, resolved server-side using the
-    same ladder as ``GET /tracks/resolve``.
-
-    Lets clients seed a playlist directly from the metadata they already
-    have, without a separate resolve round trip per seed. At least one
-    field must be set.
+    same ladder as ``GET /tracks/resolve``. At least one field must be set.
     """
 
     path: Optional[str] = Field(
@@ -163,8 +158,8 @@ class UnresolvedSeedRef(BaseModel):
     reason: Literal["no_match"] = Field(
         "no_match",
         description=(
-            "Why this ref didn't resolve. ``no_match`` is the only value "
-            "today; reserved for future expansion (``ambiguous``, etc.)."
+            "Why this ref didn't resolve. ``no_match`` is the only "
+            "current value."
         ),
     )
 
@@ -174,9 +169,8 @@ class PlaylistResult(BaseModel):
     unresolved_seed_refs: list[UnresolvedSeedRef] = Field(
         default_factory=list,
         description=(
-            "``seed_refs`` entries that didn't match any track. Empty for "
-            "fully-resolved or seed-id-only requests. Lets clients show "
-            "diagnostics like 'N of your seeds aren't in harmonie yet'."
+            "``seed_refs`` entries that didn't match any track. Empty when "
+            "the request had no ``seed_refs`` or every ref resolved."
         ),
     )
 
@@ -184,16 +178,11 @@ class PlaylistResult(BaseModel):
 # ---------------------------------------------------------------------------
 # Playlist body — discriminated by ``mode``
 # ---------------------------------------------------------------------------
-#
-# Each mode has its own validated schema. The OpenAPI document renders these
-# as a ``oneOf`` so the published contract makes the three shapes explicit
-# rather than relying on parameter-implicit dispatch.
-#
 
 
 class _SmoothTransitions(BaseModel):
-    """Consecutive-pair smoothness rules. Used by ``similar`` and ``drift``
-    modes; ignored by ``vibe`` mode (no anchor pair to smooth between)."""
+    """Consecutive-pair smoothness rules used by ``similar`` and ``drift``
+    modes; ignored by ``vibe`` mode."""
 
     bpm_tolerance: Optional[float] = Field(
         None, ge=0,
@@ -213,8 +202,7 @@ class _SmoothTransitions(BaseModel):
 
 
 class _DescriptorTarget(BaseModel):
-    """Soft preferences for ``vibe`` mode: tracks closer to these values rank
-    higher. Pure ranking — does not gate the candidate pool."""
+    """Soft ranking preferences for ``vibe`` mode."""
 
     bpm: Optional[float] = Field(None, gt=0)
     danceability: Optional[float] = Field(None, ge=0)
@@ -229,25 +217,22 @@ class _PlaylistCommon(BaseModel):
 
 
 class _SeededPlaylist(_PlaylistCommon):
-    """Common seed-source semantics for ``similar`` and ``drift``: a request
-    may carry track IDs, ``seed_refs`` (path/tags resolved server-side), or
-    both. After server-side resolution, the merged set must be non-empty.
+    """Base for modes that anchor on seed tracks (``similar``, ``drift``).
+
+    A request may carry pre-resolved IDs in ``seeds``, inline references in
+    ``seed_refs``, or both. The merged set must be non-empty.
     """
 
     seeds: list[int] = Field(
         default_factory=list,
-        description=(
-            "Pre-resolved seed track IDs. Use these when you already have "
-            "harmonie's IDs (e.g. from a previous response)."
-        ),
+        description="Pre-resolved seed track IDs.",
     )
     seed_refs: list[SeedRef] = Field(
         default_factory=list,
         description=(
             "Inline path/tag references resolved server-side via the same "
             "ladder as ``GET /tracks/resolve``. Refs that don't match a "
-            "track are reported back in ``unresolved_seed_refs``; the "
-            "request still proceeds with the ones that did."
+            "track are reported in ``unresolved_seed_refs``."
         ),
     )
 
@@ -261,8 +246,8 @@ class _SeededPlaylist(_PlaylistCommon):
 
 
 class SimilarPlaylist(_SeededPlaylist):
-    """Mode 1: similarity-anchored. The seeds' embedding centroid is the
-    target; results stay close to it."""
+    """Similarity-anchored playlist. Results stay close to the seeds'
+    embedding centroid."""
 
     mode: Literal["similar"]
     smooth_transitions: _SmoothTransitions = Field(
@@ -275,20 +260,20 @@ class SimilarPlaylist(_SeededPlaylist):
 
 
 class DriftPlaylist(_SeededPlaylist):
-    """Mode 2: drifting walk. Take ``chunk_size`` similar to the seed
-    centroid, re-anchor on the last pick, repeat.
+    """Chunked drift playlist. Takes the top ``chunk_size`` tracks similar
+    to the current anchor, re-anchors on the last pick, and repeats.
 
-    Multiple seeds are allowed. The starting anchor is the seeds' embedding
-    centroid; consecutive-pair constraints baseline against the first seed
-    in the merged list (``seeds`` first, then resolved ``seed_refs``).
+    The starting anchor is the seeds' embedding centroid. Consecutive-pair
+    constraints baseline against the first seed in the merged list
+    (``seeds`` first, then resolved ``seed_refs``).
     """
 
     mode: Literal["drift"]
     chunk_size: int = Field(
         5, ge=1, le=100,
         description=(
-            "Tracks per anchor. Larger = stays closer to the seed; smaller "
-            "= drifts faster."
+            "Tracks per anchor. Larger stays closer to the seeds; smaller "
+            "drifts faster."
         ),
     )
     smooth_transitions: _SmoothTransitions = Field(
@@ -298,8 +283,8 @@ class DriftPlaylist(_SeededPlaylist):
 
 
 class VibePlaylist(_PlaylistCommon):
-    """Mode 3: descriptor-driven. No seeds; a filter narrows the pool and a
-    target ranks within it."""
+    """Descriptor-driven playlist. No seeds; the filter narrows the pool
+    and the target ranks within it."""
 
     mode: Literal["vibe"]
     target: _DescriptorTarget = Field(
@@ -327,15 +312,10 @@ PlaylistBody = Annotated[
 
 
 class ServiceStatus(BaseModel):
-    """Service overview: configuration plus library counters.
+    """Service overview: configuration plus library counters. Returned by
+    ``GET /api/v1/status``. Live scan state lives at ``GET /api/v1/scan``."""
 
-    Returned by ``GET /api/v1/status``. Combines what was previously split
-    across ``/info`` and ``/stats``. Live scan state lives at
-    ``GET /api/v1/scan`` instead, so this endpoint is cache-friendly for
-    the ~1 minute granularity at which counters move.
-    """
-
-    # Static-ish service identity.
+    # Service identity.
     version: str
     backend: str
     embedding_dim: int

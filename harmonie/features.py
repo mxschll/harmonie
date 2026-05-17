@@ -4,15 +4,14 @@ Each backend produces, for one audio file:
 
 * a fixed-length embedding (``np.ndarray`` of float32) for similarity search,
 * a :class:`Descriptors` block of musical metadata (BPM, key, loudness, …),
-* (effnet only) a 400-d Discogs style activation vector — the genre/style
-  classifier head that runs on top of the same Effnet embeddings, so it adds
-  almost no extra cost. ``None`` for backends that don't produce embeddings
-  in Discogs-Effnet space.
+* (effnet only) a 400-d Discogs style activation vector from a genre/style
+  classifier head running on top of the Effnet embeddings. ``None`` for
+  backends that don't produce embeddings in Discogs-Effnet space.
 
 Backends:
 
-* ``effnet`` (default): Discogs-Effnet 1280-d embedding via TensorFlow plus
-  Essentia descriptor algorithms computed from the same decoded audio.
+* ``effnet`` (default): Discogs-Effnet 1280-d embedding via TensorFlow,
+  plus Essentia descriptor algorithms on the same decoded audio.
   Requires ``essentia-tensorflow``.
 
 * ``musicextractor``: Essentia's :class:`MusicExtractor`. Embedding is an
@@ -20,11 +19,9 @@ Backends:
 
 Two extraction modes are supported per backend:
 
-* :meth:`Extractor.extract` returns embedding + descriptors + styles
-  (full work).
-* :meth:`Extractor.extract_descriptors` returns descriptors only, skipping
-  the model. Used to top up rows on a descriptor-version bump without
-  re-running TensorFlow.
+* :meth:`Extractor.extract` returns embedding + descriptors + styles.
+* :meth:`Extractor.extract_descriptors` returns descriptors only. Used to
+  refresh descriptor columns without re-running TensorFlow.
 """
 
 from __future__ import annotations
@@ -220,10 +217,9 @@ def top_styles(
 ) -> list[tuple[str, float]]:
     """Return the highest-confidence ``(label, probability)`` pairs.
 
-    Up to ``top_k`` entries; entries below ``min_prob`` are dropped. The list
-    is ordered by descending probability so callers can stream a fixed-size
-    preview without a second sort. Always at most ``top_k`` rows even when
-    every activation is above the threshold."""
+    Up to ``top_k`` entries; entries below ``min_prob`` are dropped.
+    Ordered by descending probability.
+    """
     if activations.shape != (GENRE_NUM_CLASSES,):
         raise ValueError(
             f"expected activation vector of shape ({GENRE_NUM_CLASSES},), "
@@ -301,9 +297,9 @@ class EffnetExtractor:
     """1280-d Discogs-Effnet embedding + classical descriptors + 400-style
     activation vector.
 
-    The genre head is optional. If its model file isn't cached and can't be
-    downloaded, extraction degrades gracefully — embeddings + descriptors
-    still come back, and ``TrackFeatures.style_activations`` is ``None``.
+    The genre head is optional. If its model file isn't available,
+    extraction returns embeddings and descriptors with
+    ``TrackFeatures.style_activations = None``.
     """
 
     name = "discogs-effnet-bs64-1"
@@ -337,8 +333,8 @@ class EffnetExtractor:
             output=EFFNET_OUTPUT_NODE,
         )
 
-        # Genre head + label table. Loaded lazily so a network blip during
-        # head download doesn't kill the worker — we just log and fall back.
+        # Genre head + label table. Loaded lazily so a network blip
+        # during model download falls through to embeddings-only output.
         self._genre_head = None
         self._genre_labels: Optional[list[str]] = None
         if load_genre_head:
@@ -390,9 +386,9 @@ class EffnetExtractor:
             raise ValueError(f"unexpected embedding shape {emb_frames.shape}")
         emb = emb_frames.mean(axis=0).astype(np.float32, copy=False)
 
-        # Style activations: run the head on each per-frame embedding, then
-        # average the per-frame probabilities. Sigmoid-of-mean ≠ mean-of-
-        # sigmoids, so this is meaningfully different from "head(mean(emb))".
+        # Style activations: run the head on each per-frame embedding and
+        # average the per-frame probabilities. Note sigmoid(mean(emb)) is
+        # not equivalent to mean(sigmoid(head(emb))).
         style_activations: Optional[np.ndarray] = None
         if self._genre_head is not None:
             try:
@@ -559,11 +555,8 @@ Extractor = EffnetExtractor  # for type hints; both classes have the same API
 
 @dataclass(frozen=True)
 class BackendInfo:
-    """Lightweight metadata about a backend.
-
-    Used by callers (the API server, the analyzer's status response) that
-    need the model name and embedding dimensionality but don't need an
-    actual extractor instance. Reading these doesn't import essentia,
+    """Lightweight metadata about a backend: just the model name and the
+    embedding dimensionality. Reading these doesn't import essentia,
     download model files, or load TensorFlow.
     """
 
@@ -573,11 +566,8 @@ class BackendInfo:
 
 def get_backend_info(backend: str = "effnet") -> BackendInfo:
     """Return :class:`BackendInfo` for the given backend without
-    instantiating the extractor.
-
-    The TF graph and model files are loaded only inside worker processes,
-    on first scan. Calling this from the FastAPI lifespan (or anywhere
-    in the main process) is free.
+    instantiating the extractor. The TF graph and model files are loaded
+    only inside worker processes on first scan.
     """
     backend = backend.lower()
     if backend in ("effnet", "discogs-effnet", "tf"):

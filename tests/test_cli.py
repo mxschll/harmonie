@@ -54,12 +54,11 @@ def _populate(
 
 @pytest.fixture
 def cli_env(tmp_path: Path, monkeypatch):
-    """Build a populated DB at the same path the CLI will open, and patch
-    ``cli.get_settings`` to point at it. Returns ``(db, settings, lib)``,
-    where ``lib`` is the (hermetic, tmp_path-rooted) library directory the
-    fake tracks live under — important because some CLI commands resolve
-    user-supplied paths through symlinks (and ``/lib`` is a symlink on
-    most Linux distros)."""
+    """Build a populated DB at the path the CLI will open, and patch
+    ``cli.get_settings`` to point at it. Returns ``(db, settings, lib)``;
+    ``lib`` is the tmp_path-rooted library directory used in fake track
+    paths.
+    """
     from harmonie.db import Database
 
     settings = Settings(libraries=[tmp_path], data_dir=tmp_path)

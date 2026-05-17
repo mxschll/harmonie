@@ -1,10 +1,4 @@
-"""Scan orchestration and scheduler.
-
-The :class:`Analyzer` owns the worker pool and the database for the lifetime
-of the service. It runs scans on demand or on a schedule, with a single-run
-mutex so concurrent triggers (HTTP /scan + scheduler tick at the same time)
-don't double up.
-"""
+"""Scan orchestration and scheduler."""
 
 from __future__ import annotations
 
@@ -40,21 +34,18 @@ logger = logging.getLogger("harmonie.analyzer")
 @dataclass
 class ScanStatus:
     state: str = "idle"  # idle | scanning
-    # Sub-phase visible while ``state == "scanning"``. Lets clients tell the
-    # difference between "walking the filesystem" and "running TF inference",
-    # which can have very different time profiles on slow mounts.
-    phase: str = "idle"  # idle | enumerating | extracting | pruning
+    phase: str = "idle"  # idle | enumerating | classifying | extracting | pruning
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     last_duration_sec: Optional[float] = None
     last_error: Optional[str] = None
 
-    discovered: int = 0       # files found by walker (updated live)
-    full: int = 0             # full extractions (model + descriptors)
-    descriptors_only: int = 0 # descriptor top-ups
-    skipped: int = 0          # already up-to-date
+    discovered: int = 0
+    full: int = 0
+    descriptors_only: int = 0
+    skipped: int = 0
     failed: int = 0
-    removed: int = 0          # rows pruned because file vanished
+    removed: int = 0
 
     failures: list[tuple[str, str]] = field(default_factory=list)
 
@@ -88,9 +79,7 @@ class Analyzer:
         self.settings = settings
         self.db = Database(settings.db_path)
         self.index = EmbeddingIndex(self.db)
-        # Pull the backend's static metadata without importing essentia
-        # or loading the TF graph. Workers load the actual model on first
-        # extraction.
+        # Backend metadata only — workers load the actual model.
         info = get_backend_info(settings.backend)
         self.model_name: str = info.name
         self.embedding_dim: int = info.dim
@@ -118,8 +107,8 @@ class Analyzer:
 
     def scan(self, *, force: bool = False) -> ScanStatus:
         """Run one scan synchronously. Safe to call from any thread; the
-        internal lock prevents overlap. If a scan is already running, this
-        call returns its current status without starting a new one."""
+        internal lock prevents overlap. Returns the current status without
+        starting a new scan if one is already running."""
         if not self._scan_lock.acquire(blocking=False):
             logger.info("scan already in progress; skipping new request")
             return self.status
@@ -139,9 +128,8 @@ class Analyzer:
         libs = [Path(p) for p in self.settings.libraries]
         if not libs:
             logger.warning("no libraries configured (HARMONIE_LIBRARIES is empty)")
-        # Separate reachable roots from missing ones. We will only prune
-        # entries that live under reachable roots — a flaky NAS shouldn't
-        # wipe the index just because the mount is down right now.
+        # Only prune entries that live under reachable roots so a flaky
+        # NAS doesn't wipe the index when the mount is unavailable.
         reachable: list[Path] = []
         unreachable: list[Path] = []
         for p in libs:
@@ -152,10 +140,8 @@ class Analyzer:
         for p in unreachable:
             logger.warning("library root unreachable, skipping: %s", p)
 
-        # Enumerate files. On slow mounts (NFS, remote SMB) this can take
-        # minutes. Update self.status.discovered on every yield so callers
-        # polling /api/v1/scan see live progress, and log a status line every
-        # 10 seconds so the CLI sees something too.
+        # Enumeration: update self.status.discovered on each yield, log
+        # every 10 seconds.
         if reachable:
             logger.info(
                 "scanning libraries: %s",
@@ -174,10 +160,8 @@ class Analyzer:
                 last_progress = now
         logger.info("discovered %d audio file(s)", len(files))
 
-        # Classify each file (one stat() each, plus DB lookup) to decide
-        # full extraction vs descriptor-only top-up vs skip. On slow mounts
-        # the per-file stat is the bottleneck here, so emit periodic
-        # progress and update self.status.phase so /api/v1/scan reflects it.
+        # Classification: one stat() per file plus a DB lookup. Periodic
+        # progress on the same 10-second cadence as enumeration.
         self.status.phase = "classifying"
         classify_state = {"last": time.monotonic()}
 
@@ -202,8 +186,7 @@ class Analyzer:
             len(full_jobs), len(desc_jobs), skipped,
         )
 
-        # Defer worker pool startup until we know there's work. Saves a
-        # multi-second TF model load when the scan is a no-op.
+        # Worker pool starts only when there's work to dispatch.
         all_jobs: list = list(full_jobs) + list(desc_jobs)
         if all_jobs:
             self.status.phase = "extracting"
@@ -213,8 +196,8 @@ class Analyzer:
             for result in self.pool.map(all_jobs, chunksize=1):
                 self._handle_result(result, reachable_roots=reachable)
 
-        # Drop rows for files that disappeared, scoped to roots we actually
-        # walked. Skip pruning entirely if no roots were reachable.
+        # Prune rows for files that disappeared, scoped to the roots we
+        # actually walked.
         if reachable:
             self.status.phase = "pruning"
             present = {str(f) for f in files}
@@ -226,15 +209,11 @@ class Analyzer:
                 logger.info("pruned %d removed track(s)", removed)
         else:
             logger.warning(
-                "no reachable libraries this scan; skipping prune to protect "
-                "the index"
+                "no reachable libraries this scan; skipping prune"
             )
 
         elapsed = time.monotonic() - t0
-        # Drop cached embedding matrices so the next query rebuilds with the
-        # newly-written rows (or skipped rows that just had descriptors
-        # refreshed — those don't change embeddings, but invalidating
-        # everything is simpler and the rebuild is cheap).
+        # Drop cached embedding matrices; the next query rebuilds them.
         self.index.invalidate()
         self.status.state = "idle"
         self.status.phase = "idle"
@@ -276,10 +255,9 @@ class Analyzer:
 
         elif isinstance(result, DescriptorResult):
             try:
-                # Note: library_root/relative_path are not refreshed by the
-                # descriptor-only path. They were set when the row was first
-                # inserted and only change if the file path itself changes,
-                # which would have triggered a full re-extraction.
+                # library_root and relative_path are not refreshed on the
+                # descriptor-only path — a path change forces full
+                # extraction.
                 self.db.update_descriptors(
                     result.path,
                     descriptors=result.descriptors,

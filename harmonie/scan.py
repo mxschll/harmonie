@@ -19,10 +19,9 @@ def is_audio_file(path: Path) -> bool:
 
 
 def iter_audio_files(roots: Iterable[Path]) -> Iterator[Path]:
-    """Yield audio files under each root, recursively. Roots may be files or dirs.
-
-    Hidden directories are skipped. Symlinks are not followed (avoid loops in
-    weird mounts). De-duplicates by realpath.
+    """Yield audio files under each root, recursively. Roots may be files
+    or directories. Hidden directories are skipped, symlinks are not
+    followed, and results are de-duplicated by realpath.
     """
     seen: set[str] = set()
     for root in roots:
@@ -55,8 +54,8 @@ def split_library_path(
     Returns ``(library_root, relative_path)`` as resolved absolute strings,
     or ``(None, None)`` if the path isn't under any of ``libraries``.
 
-    The first matching library wins. Both inputs are resolved before
-    comparison so trailing slashes and relative components don't trip us up.
+    The first matching library wins. Both inputs are resolved to absolute
+    paths before comparison.
     """
     try:
         target = Path(path).expanduser().resolve()
