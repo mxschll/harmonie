@@ -176,7 +176,7 @@ def test_chained_playlist_no_duplicates(make_db, fake_descriptors):
         _add(db, f"/n{i}", v, fake_descriptors())
 
     items = generate_chained_playlist(
-        db, index, ChainedPlaylistRequest(seed_id=seed, chunk_size=5, n=25)
+        db, index, ChainedPlaylistRequest(seed_ids=[seed], chunk_size=5, n=25)
     )
     assert len(items) == 25
     ids = [m.track_id for m in items]
@@ -198,7 +198,7 @@ def test_chained_anchor_actually_changes(make_db, fake_descriptors):
         _add(db, f"/b{i}", v, fake_descriptors())
 
     items = generate_chained_playlist(
-        db, index, ChainedPlaylistRequest(seed_id=seed, chunk_size=8, n=16)
+        db, index, ChainedPlaylistRequest(seed_ids=[seed], chunk_size=8, n=16)
     )
     first_chunk = [m.path for m in items[:8]]
     second_chunk = [m.path for m in items[8:16]]
@@ -216,7 +216,7 @@ def test_chained_chunk_size_one_is_greedy_walk(make_db, fake_descriptors):
         _add(db, f"/n{i}", v, fake_descriptors())
 
     items = generate_chained_playlist(
-        db, index, ChainedPlaylistRequest(seed_id=seed, chunk_size=1, n=10)
+        db, index, ChainedPlaylistRequest(seed_ids=[seed], chunk_size=1, n=10)
     )
     assert len(items) == 10
     assert len({m.track_id for m in items}) == 10
@@ -232,7 +232,7 @@ def test_chained_stops_when_candidates_exhausted(make_db, fake_descriptors):
              np.array([0.9, 0.1 * (i + 1), 0, 0], dtype=np.float32),
              fake_descriptors())
     items = generate_chained_playlist(
-        db, index, ChainedPlaylistRequest(seed_id=seed, chunk_size=5, n=100)
+        db, index, ChainedPlaylistRequest(seed_ids=[seed], chunk_size=5, n=100)
     )
     assert len(items) == 3
 
@@ -250,7 +250,7 @@ def test_chained_filter_applied(make_db, fake_descriptors):
     items = generate_chained_playlist(
         db, index,
         ChainedPlaylistRequest(
-            seed_id=seed, chunk_size=3, n=10,
+            seed_ids=[seed], chunk_size=3, n=10,
             descriptor_filter=TrackFilter(bpm_min=120, bpm_max=140),
         ),
     )
@@ -269,7 +269,7 @@ def test_chained_include_seed(make_db, fake_descriptors):
         _add(db, f"/n{i}", v, fake_descriptors())
     items = generate_chained_playlist(
         db, index,
-        ChainedPlaylistRequest(seed_id=seed, chunk_size=2, n=4, include_seed=True),
+        ChainedPlaylistRequest(seed_ids=[seed], chunk_size=2, n=4, include_seed=True),
     )
     assert len(items) == 4
     assert items[0].track_id == seed
@@ -293,7 +293,7 @@ def test_chained_respects_bpm_tolerance(make_db, fake_descriptors):
     items = generate_chained_playlist(
         db, index,
         ChainedPlaylistRequest(
-            seed_id=seed, chunk_size=3, n=10, bpm_drift=6,
+            seed_ids=[seed], chunk_size=3, n=10, bpm_drift=6,
         ),
     )
     assert len(items) > 0
@@ -328,7 +328,7 @@ def test_chained_respects_key_compatible(make_db, fake_descriptors):
     items = generate_chained_playlist(
         db, index,
         ChainedPlaylistRequest(
-            seed_id=seed, chunk_size=4, n=12, harmonic_mix=True,
+            seed_ids=[seed], chunk_size=4, n=12, harmonic_mix=True,
         ),
     )
     assert len(items) > 0
@@ -364,7 +364,7 @@ def test_chained_combines_bpm_and_key_constraints(make_db, fake_descriptors):
     items = generate_chained_playlist(
         db, index,
         ChainedPlaylistRequest(
-            seed_id=seed, chunk_size=3, n=8,
+            seed_ids=[seed], chunk_size=3, n=8,
             bpm_drift=4, harmonic_mix=True,
         ),
     )
@@ -375,3 +375,70 @@ def test_chained_combines_bpm_and_key_constraints(make_db, fake_descriptors):
         assert abs(bpm - prev[0]) <= 4
         assert (key, scale) in compatible_keys_for(prev[1], prev[2])
         prev = (bpm, key, scale)
+
+
+
+def test_chained_multiseed_uses_centroid_anchor(make_db, fake_descriptors):
+    """Drift mode with multiple seeds anchors on the centroid of their
+    embeddings, not on any single seed. Verify that picks come from the
+    centroid neighborhood — i.e. close to the average of the seed vectors."""
+    db, index = make_db()
+    rng = np.random.default_rng(101)
+
+    # Two seeds that span two distinct clusters in embedding space.
+    seed_a = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    seed_b = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
+    sid_a = _add(db, "/seed_a", seed_a, fake_descriptors())
+    sid_b = _add(db, "/seed_b", seed_b, fake_descriptors())
+
+    # The centroid lies at (0.5, 0.5, 0, 0); normalized that's
+    # (~0.707, ~0.707, 0, 0). Plant some candidates near the centroid and
+    # some far away; near-centroid ones should win.
+    centroid = np.array([0.707, 0.707, 0.0, 0.0], dtype=np.float32)
+    near_ids = []
+    for i in range(5):
+        v = centroid + 0.05 * rng.standard_normal(4).astype(np.float32)
+        near_ids.append(_add(db, f"/near{i}", v, fake_descriptors()))
+    # Tracks far from centroid (orthogonal direction).
+    far = np.array([0.0, 0.0, 1.0, 0.0], dtype=np.float32)
+    for i in range(5):
+        v = far + 0.05 * rng.standard_normal(4).astype(np.float32)
+        _add(db, f"/far{i}", v, fake_descriptors())
+
+    items = generate_chained_playlist(
+        db, index,
+        ChainedPlaylistRequest(
+            seed_ids=[sid_a, sid_b], chunk_size=3, n=3,
+        ),
+    )
+    assert len(items) == 3
+    chosen_paths = {m.path for m in items}
+    # Every pick should be from the near-centroid cluster, not the far one.
+    assert all(p.startswith("/near") for p in chosen_paths)
+
+
+def test_chained_multiseed_include_seed_emits_each(make_db, fake_descriptors):
+    """When include_seed is True with multiple seeds, every seed appears
+    in the output (in input order), and the rest of the playlist follows."""
+    db, index = make_db()
+    rng = np.random.default_rng(202)
+    seed_emb = rng.standard_normal(4).astype(np.float32)
+    sid_x = _add(db, "/seed_x", seed_emb, fake_descriptors())
+    sid_y = _add(db, "/seed_y", seed_emb + 0.1 * rng.standard_normal(4),
+                 fake_descriptors())
+    for i in range(8):
+        v = seed_emb + 0.2 * rng.standard_normal(4).astype(np.float32)
+        _add(db, f"/n{i}", v, fake_descriptors())
+
+    items = generate_chained_playlist(
+        db, index,
+        ChainedPlaylistRequest(
+            seed_ids=[sid_x, sid_y], chunk_size=3, n=6, include_seed=True,
+        ),
+    )
+    assert len(items) == 6
+    # Seeds are first two, in input order.
+    assert items[0].track_id == sid_x
+    assert items[1].track_id == sid_y
+    # No duplicates.
+    assert len({m.track_id for m in items}) == 6

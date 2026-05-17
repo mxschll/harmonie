@@ -31,6 +31,7 @@ from .schemas import (
     PlaylistBody,
     PlaylistResult,
     ScanState,
+    SeedRef,
     ServiceStatus,
     SimilarPlaylist,
     SimilarResult,
@@ -40,6 +41,7 @@ from .schemas import (
     Track,
     TrackList,
     TrackSummary,
+    UnresolvedSeedRef,
     VibePlaylist,
 )
 
@@ -363,6 +365,42 @@ def list_styles(
 # ---- playlists -----------------------------------------------------------
 
 
+def _resolve_seed_refs(
+    db: Database, refs: list[SeedRef]
+) -> tuple[list[int], list[UnresolvedSeedRef]]:
+    """Resolve each ``SeedRef`` via :meth:`Database.find_track`.
+
+    Returns ``(resolved_ids, unresolved)``. Resolution is best-effort: refs
+    that don't match are reported in ``unresolved`` rather than raising,
+    so a mostly-good seed list still produces a playlist.
+    """
+    resolved: list[int] = []
+    unresolved: list[UnresolvedSeedRef] = []
+    for ref in refs:
+        row = db.find_track(
+            path=ref.path,
+            artist=ref.artist,
+            album=ref.album,
+            title=ref.title,
+        )
+        if row is None:
+            unresolved.append(UnresolvedSeedRef(ref=ref))
+        else:
+            resolved.append(int(row["id"]))
+    return resolved, unresolved
+
+
+def _merge_seed_ids(seeds: list[int], resolved: list[int]) -> list[int]:
+    """Concatenate ``seeds`` and ``resolved``, preserving order, deduping."""
+    out: list[int] = []
+    seen: set[int] = set()
+    for sid in (*seeds, *resolved):
+        if sid not in seen:
+            out.append(sid)
+            seen.add(sid)
+    return out
+
+
 @api_router.post("/playlists", response_model=PlaylistResult)
 def make_playlist(
     body: Annotated[PlaylistBody, Body(...)],
@@ -372,21 +410,42 @@ def make_playlist(
     """Generate a playlist. The body's ``mode`` field selects the strategy:
 
     * ``similar``: anchored on the seeds' embedding centroid.
-    * ``drift``: walk away from one seed in chunks, re-anchoring on the
-      most recent pick each chunk.
+    * ``drift``: walk away from the seeds' centroid in chunks, re-anchoring
+      on the most recent pick each chunk.
     * ``vibe``: descriptor-driven; ``filter`` narrows the pool and
       ``target`` ranks within it.
+
+    ``similar`` and ``drift`` accept seeds either as resolved IDs in
+    ``seeds`` or as inline path/tag references in ``seed_refs`` (resolved
+    server-side using the same ladder as ``GET /tracks/resolve``). Refs
+    that don't match a track are returned in ``unresolved_seed_refs``;
+    the playlist is built from the ones that did. The request fails with
+    400 only if every supplied seed (id or ref) fails to resolve.
     """
     descriptor_filter = (
         body.filter.to_track_filter() if body.filter is not None else None
     )
+
+    # Resolve any seed_refs once, up front. Vibe mode has no seeds, so
+    # this stays empty for it.
+    unresolved: list[UnresolvedSeedRef] = []
+    if isinstance(body, (SimilarPlaylist, DriftPlaylist)):
+        resolved_ids, unresolved = _resolve_seed_refs(db, body.seed_refs)
+        merged_seed_ids = _merge_seed_ids(body.seeds, resolved_ids)
+        if not merged_seed_ids:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "no seeds resolved; check seed_refs against /tracks/resolve",
+            )
+    else:
+        merged_seed_ids = []
 
     try:
         if isinstance(body, SimilarPlaylist):
             items = generate_similar_playlist(
                 db, index,
                 SimilarPlaylistRequest(
-                    seed_ids=body.seeds,
+                    seed_ids=merged_seed_ids,
                     n=body.n,
                     bpm_drift=body.smooth_transitions.bpm_tolerance,
                     harmonic_mix=body.smooth_transitions.key_compatible,
@@ -398,7 +457,7 @@ def make_playlist(
             items = generate_chained_playlist(
                 db, index,
                 ChainedPlaylistRequest(
-                    seed_id=body.seeds[0],
+                    seed_ids=merged_seed_ids,
                     chunk_size=body.chunk_size,
                     n=body.n,
                     descriptor_filter=descriptor_filter,
@@ -428,7 +487,10 @@ def make_playlist(
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
 
-    return PlaylistResult(items=_enrich_matches(db, items))
+    return PlaylistResult(
+        items=_enrich_matches(db, items),
+        unresolved_seed_refs=unresolved,
+    )
 
 
 # ---- scan resource -------------------------------------------------------

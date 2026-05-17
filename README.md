@@ -216,7 +216,7 @@ curl -X POST http://localhost:8842/api/v1/playlists \
 
 #### Mode `drift`: chunked walk
 
-`drift` walks gradually away from one seed. Each chunk of `chunk_size` tracks is anchored on the last pick, so the playlist evolves in style as it goes.
+`drift` walks gradually away from the seeds' embedding centroid. Each chunk of `chunk_size` tracks is anchored on the last pick, so the playlist evolves in style as it goes. One seed or several — both work; with multiple seeds, the centroid is the starting anchor.
 
 ```bash
 curl -X POST http://localhost:8842/api/v1/playlists \
@@ -256,6 +256,39 @@ curl -X POST http://localhost:8842/api/v1/playlists \
   }'
 ```
 
+#### Inline path or tag references
+
+If the client only has paths or tags, not harmonie's IDs, send `seed_refs` instead of (or alongside) `seeds`. Each entry is the same shape as `GET /tracks/resolve`:
+
+```bash
+curl -X POST http://localhost:8842/api/v1/playlists \
+  -H 'content-type: application/json' \
+  -d '{
+    "mode": "similar",
+    "n": 20,
+    "seed_refs": [
+      { "path": "/music/Album/01.flac" },
+      { "artist": "Aphex Twin", "album": "Selected Ambient Works", "title": "Xtal" },
+      { "artist": "Daft Punk", "title": "One More Time" }
+    ]
+  }'
+```
+
+Harmonie resolves each ref server-side via the same ladder as `/tracks/resolve` (exact path, then `relative_path`, then `artist+album+title`, then `title+artist` or `title+album`). Refs that don't match a track come back under `unresolved_seed_refs`:
+
+```json
+{
+  "items": [ ... ],
+  "unresolved_seed_refs": [
+    { "ref": { "artist": "Daft Punk", "title": "One More Time" }, "reason": "no_match" }
+  ]
+}
+```
+
+The playlist is built from whichever refs did resolve. The request fails with 400 only if every ref *and* every explicit `seeds` ID fail to resolve.
+
+`seeds` and `seed_refs` can be combined. The merged seed list keeps `seeds` order first, then resolved-ref order, deduped.
+
 #### Body field reference
 
 | Field | Modes | Default | Range | Purpose |
@@ -263,11 +296,12 @@ curl -X POST http://localhost:8842/api/v1/playlists \
 | `mode` | all | required | `similar` \| `drift` \| `vibe` | Strategy selector. |
 | `n` | all | `20` | 1–500 | Number of tracks to return. |
 | `filter` | all | none | | Hard candidate-pool constraints. Same shape as the URL filter, in body form. |
-| `seeds` | similar, drift | required | similar: ≥1, drift: exactly 1 | Track IDs to anchor on. |
+| `seeds` | similar, drift | `[]` | ≥0 | Pre-resolved track IDs. Combine with `seed_refs` for "I have a few IDs and a few paths." |
+| `seed_refs` | similar, drift | `[]` | ≥0 | Inline path/tag references resolved server-side via the `/tracks/resolve` ladder. At least one of `seeds` or `seed_refs` must be non-empty. |
 | `include_seeds` | similar, drift | `false` | | Include the seed track(s) in the result. |
 | `smooth_transitions.bpm_tolerance` | similar, drift | `null` | ≥0 | Max BPM gap between consecutive picks. Lenient on missing BPMs. |
 | `smooth_transitions.key_compatible` | similar, drift | `false` | | Restrict consecutive picks to harmonically compatible keys (Camelot wheel: same key, ±1 number, parallel mode). Strict: tracks without key info are dropped. |
-| `chunk_size` | drift | `5` | 1–100 | Tracks per anchor before re-anchoring on the last pick. Larger stays closer to the seed; smaller drifts faster. |
+| `chunk_size` | drift | `5` | 1–100 | Tracks per anchor before re-anchoring on the last pick. Larger stays closer to the seeds; smaller drifts faster. |
 | `target.bpm` | vibe | `null` | >0 | Soft preference. Tracks closer to this BPM rank higher. |
 | `target.danceability` | vibe | `null` | ≥0 | Soft preference for closeness to this danceability score. |
 | `shuffle` | vibe | `true` | | Randomise the (post-target) pool before truncation. |

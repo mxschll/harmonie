@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .filters import FilterBody
 
@@ -122,8 +122,63 @@ class SimilarResult(BaseModel):
     matches: list[MatchOut]
 
 
+# ---------------------------------------------------------------------------
+# Seed references (used by ``similar`` and ``drift`` playlist modes)
+# ---------------------------------------------------------------------------
+
+
+class SeedRef(BaseModel):
+    """Reference to a track by path or tags, resolved server-side using the
+    same ladder as ``GET /tracks/resolve``.
+
+    Lets clients seed a playlist directly from the metadata they already
+    have, without a separate resolve round trip per seed. At least one
+    field must be set.
+    """
+
+    path: Optional[str] = Field(
+        None,
+        description=(
+            "Absolute or library-relative path. Tried before tag matching."
+        ),
+    )
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    title: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "SeedRef":
+        if not (self.path or self.artist or self.album or self.title):
+            raise ValueError(
+                "seed_refs entries must set at least one of: "
+                "path, artist, album, title"
+            )
+        return self
+
+
+class UnresolvedSeedRef(BaseModel):
+    """One ``seed_refs`` entry that could not be matched to a track."""
+
+    ref: SeedRef
+    reason: Literal["no_match"] = Field(
+        "no_match",
+        description=(
+            "Why this ref didn't resolve. ``no_match`` is the only value "
+            "today; reserved for future expansion (``ambiguous``, etc.)."
+        ),
+    )
+
+
 class PlaylistResult(BaseModel):
     items: list[MatchOut]
+    unresolved_seed_refs: list[UnresolvedSeedRef] = Field(
+        default_factory=list,
+        description=(
+            "``seed_refs`` entries that didn't match any track. Empty for "
+            "fully-resolved or seed-id-only requests. Lets clients show "
+            "diagnostics like 'N of your seeds aren't in harmonie yet'."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -173,12 +228,43 @@ class _PlaylistCommon(BaseModel):
     )
 
 
-class SimilarPlaylist(_PlaylistCommon):
+class _SeededPlaylist(_PlaylistCommon):
+    """Common seed-source semantics for ``similar`` and ``drift``: a request
+    may carry track IDs, ``seed_refs`` (path/tags resolved server-side), or
+    both. After server-side resolution, the merged set must be non-empty.
+    """
+
+    seeds: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Pre-resolved seed track IDs. Use these when you already have "
+            "harmonie's IDs (e.g. from a previous response)."
+        ),
+    )
+    seed_refs: list[SeedRef] = Field(
+        default_factory=list,
+        description=(
+            "Inline path/tag references resolved server-side via the same "
+            "ladder as ``GET /tracks/resolve``. Refs that don't match a "
+            "track are reported back in ``unresolved_seed_refs``; the "
+            "request still proceeds with the ones that did."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _at_least_one_seed(self) -> "_SeededPlaylist":
+        if not self.seeds and not self.seed_refs:
+            raise ValueError(
+                "playlist requires at least one of: seeds, seed_refs"
+            )
+        return self
+
+
+class SimilarPlaylist(_SeededPlaylist):
     """Mode 1: similarity-anchored. The seeds' embedding centroid is the
     target; results stay close to it."""
 
     mode: Literal["similar"]
-    seeds: list[int] = Field(..., min_length=1, description="Seed track IDs.")
     smooth_transitions: _SmoothTransitions = Field(
         default_factory=_SmoothTransitions,
         description="Optional consecutive-pair smoothness rules.",
@@ -188,15 +274,16 @@ class SimilarPlaylist(_PlaylistCommon):
     )
 
 
-class DriftPlaylist(_PlaylistCommon):
-    """Mode 2: drifting walk. Take ``chunk_size`` similar to the seed,
-    re-anchor on the last pick, repeat."""
+class DriftPlaylist(_SeededPlaylist):
+    """Mode 2: drifting walk. Take ``chunk_size`` similar to the seed
+    centroid, re-anchor on the last pick, repeat.
+
+    Multiple seeds are allowed. The starting anchor is the seeds' embedding
+    centroid; consecutive-pair constraints baseline against the first seed
+    in the merged list (``seeds`` first, then resolved ``seed_refs``).
+    """
 
     mode: Literal["drift"]
-    seeds: list[int] = Field(
-        ..., min_length=1, max_length=1,
-        description="Single-element list. The drift walk needs one anchor.",
-    )
     chunk_size: int = Field(
         5, ge=1, le=100,
         description=(

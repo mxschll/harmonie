@@ -331,21 +331,32 @@ class TestPlaylistDiscriminator:
         assert r.status_code == 200, r.text
 
     def test_similar_mode_empty_seeds_rejected(self, client):
+        """Empty ``seeds`` and no ``seed_refs`` → 422. The model validator
+        requires at least one of the two fields to be non-empty."""
         c, _ = client
         r = c.post(
             "/api/v1/playlists",
             json={"mode": "similar", "n": 2, "seeds": []},
         )
-        assert r.status_code == 422  # validation: min_length=1
+        assert r.status_code == 422
 
-    def test_drift_mode_requires_exactly_one_seed(self, client):
-        c, _ = client
-        # Two seeds in drift mode → schema rejects (max_length=1).
+    def test_drift_mode_accepts_multiple_seeds(self, client):
+        """Drift mode now allows >1 seed; the centroid becomes the starting
+        anchor. Previously this was a schema rejection (max_length=1)."""
+        c, db = client
+        ids = [int(r["id"]) for r in db.list_tracks(limit=2)[0]]
         r = c.post(
             "/api/v1/playlists",
-            json={"mode": "drift", "seeds": [1, 2], "chunk_size": 3, "n": 6},
+            json={"mode": "drift", "seeds": ids, "chunk_size": 3, "n": 4},
         )
-        assert r.status_code == 422
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # No unresolved refs because we sent IDs only.
+        assert body["unresolved_seed_refs"] == []
+        # Seeds aren't in the result by default (include_seeds=False).
+        returned_ids = [it["track_id"] for it in body["items"]]
+        for sid in ids:
+            assert sid not in returned_ids
 
     def test_vibe_mode_no_seeds_field(self, client):
         c, _ = client
@@ -404,6 +415,144 @@ class TestPlaylistDiscriminator:
         )
         assert r.status_code == 200, r.text
 
+
+
+# ---------------------------------------------------------------------------
+# Inline seed references on /playlists
+# ---------------------------------------------------------------------------
+
+
+class TestPlaylistSeedRefs:
+    """Cover the ``seed_refs`` path on POST /playlists: server-side resolution
+    via the same ladder /tracks/resolve uses, mixed with explicit ``seeds``,
+    unresolved reporting, and the all-unresolved error."""
+
+    def test_seed_ref_by_path(self, client):
+        c, _ = client
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "similar",
+                "n": 2,
+                "seed_refs": [{"path": "/lib/mid.flac"}],
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["unresolved_seed_refs"] == []
+        assert len(body["items"]) >= 1
+
+    def test_seed_ref_by_tags(self, client):
+        c, _ = client
+        # _populate stores artist=name (e.g. "mid.flac") and title=name.strip(.flac).
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "similar",
+                "n": 2,
+                "seed_refs": [
+                    {"artist": "mid.flac", "album": None, "title": "mid"},
+                ],
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["unresolved_seed_refs"] == []
+
+    def test_seed_refs_mixed_with_explicit_ids(self, client):
+        """Sending both ``seeds`` and ``seed_refs`` works; the merged set
+        is deduped."""
+        c, db = client
+        rows = db.list_tracks(limit=2)[0]
+        seed_id = int(rows[0]["id"])
+        seed_path = rows[1]["path"]
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "similar",
+                "n": 2,
+                "seeds": [seed_id],
+                "seed_refs": [{"path": seed_path}],
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["unresolved_seed_refs"] == []
+
+    def test_unresolved_seed_refs_reported(self, client):
+        """A bad ref alongside a good one: the good one drives the playlist
+        and the bad one shows up in unresolved_seed_refs."""
+        c, _ = client
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "similar",
+                "n": 2,
+                "seed_refs": [
+                    {"path": "/lib/mid.flac"},
+                    {"artist": "DoesNotExist", "title": "Nope"},
+                ],
+            },
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert len(body["unresolved_seed_refs"]) == 1
+        bad = body["unresolved_seed_refs"][0]
+        assert bad["reason"] == "no_match"
+        assert bad["ref"]["artist"] == "DoesNotExist"
+        assert len(body["items"]) >= 1
+
+    def test_all_seed_refs_unresolved_400(self, client):
+        """If nothing resolves and no explicit ``seeds`` were given, the
+        request is a 400 — there's nothing to build a playlist from."""
+        c, _ = client
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "similar",
+                "n": 2,
+                "seed_refs": [
+                    {"path": "/lib/nope-1.flac"},
+                    {"artist": "Nobody", "title": "Nothing"},
+                ],
+            },
+        )
+        assert r.status_code == 400
+        assert "no seeds resolved" in r.json()["detail"].lower()
+
+    def test_seed_ref_requires_at_least_one_field(self, client):
+        """An empty SeedRef ({}) is a schema error — Pydantic validator."""
+        c, _ = client
+        r = c.post(
+            "/api/v1/playlists",
+            json={"mode": "similar", "n": 2, "seed_refs": [{}]},
+        )
+        assert r.status_code == 422
+
+    def test_no_seeds_and_no_seed_refs_rejected(self, client):
+        """Both fields empty/missing → 422. Validator on _SeededPlaylist."""
+        c, _ = client
+        r = c.post(
+            "/api/v1/playlists",
+            json={"mode": "similar", "n": 2},
+        )
+        assert r.status_code == 422
+
+    def test_drift_with_seed_refs(self, client):
+        """Drift mode accepts seed_refs alone (no explicit ``seeds``)."""
+        c, _ = client
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "drift",
+                "n": 3,
+                "chunk_size": 2,
+                "seed_refs": [
+                    {"path": "/lib/mid.flac"},
+                    {"path": "/lib/fast.flac"},
+                ],
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["unresolved_seed_refs"] == []
 
 
 # ---------------------------------------------------------------------------

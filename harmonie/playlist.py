@@ -232,17 +232,22 @@ def generate_similar_playlist(
 class ChainedPlaylistRequest:
     """Walk the embedding space in chunks.
 
-    Take the top ``chunk_size`` similar tracks to the seed; re-anchor on the
-    last track of that chunk and take the next ``chunk_size`` similars; repeat
-    until the playlist has ``n`` tracks (or unique candidates run out). No
-    track is ever repeated, so the chain can't loop back on itself.
+    Take the top ``chunk_size`` similar tracks to the anchor; re-anchor on
+    the last track of that chunk and take the next ``chunk_size`` similars;
+    repeat until the playlist has ``n`` tracks (or unique candidates run
+    out). No track is ever repeated, so the chain can't loop back on itself.
+
+    Multiple seeds are allowed. The starting anchor is the seeds' embedding
+    centroid; the consecutive-transition baseline (``bpm_drift``,
+    ``harmonic_mix``) starts from the *first* seed, mirroring how
+    ``generate_similar_playlist`` treats its seed list.
 
     ``bpm_drift`` and ``harmonic_mix`` enforce smooth transitions between
     *consecutive* picks (each new track is compatible with the immediately
     previous pick). They apply both within and across chunks.
     """
 
-    seed_id: int
+    seed_ids: list[int]
     chunk_size: int = 5
     n: int = 20
     descriptor_filter: Optional[TrackFilter] = None
@@ -256,20 +261,33 @@ def generate_chained_playlist(
 ) -> list[Match]:
     if req.chunk_size < 1:
         raise ValueError("chunk_size must be >= 1")
+    if not req.seed_ids:
+        raise ValueError("seed_ids must contain at least one track id")
     if req.n < 1:
         return []
 
-    seed_row = db.get_track_by_id(req.seed_id)
-    if seed_row is None:
-        raise KeyError(f"seed track {req.seed_id} not in database")
-    model = seed_row["model"]
+    # Resolve all seed rows up front and verify they share a model.
+    seed_rows = []
+    for sid in req.seed_ids:
+        row = db.get_track_by_id(sid)
+        if row is None:
+            raise KeyError(f"seed track {sid} not in database")
+        seed_rows.append(row)
+    models = {r["model"] for r in seed_rows}
+    if len(models) > 1:
+        raise ValueError(f"seed tracks span multiple models: {models}")
+    model = next(iter(models))
 
     cached = index.get(model)
     if cached.empty:
         return []
-    seed_idx = cached.id_to_row.get(req.seed_id)
-    if seed_idx is None:
-        return []
+
+    seed_indices: list[int] = []
+    for r in seed_rows:
+        idx = cached.id_to_row.get(int(r["id"]))
+        if idx is None:
+            return []  # stale state; bail
+        seed_indices.append(idx)
 
     allowed_ids: Optional[set[int]] = None
     if req.descriptor_filter is not None and not req.descriptor_filter.is_empty():
@@ -280,20 +298,31 @@ def generate_chained_playlist(
     needs_meta = req.bpm_drift is not None or req.harmonic_mix
     track_meta = db.bpm_key_by_id_for_model(model) if needs_meta else {}
 
-    visited: set[int] = {req.seed_id}
+    visited: set[int] = set(req.seed_ids)
     chosen: list[Match] = []
     if req.include_seed:
-        chosen.append(
-            Match(track_id=req.seed_id, path=cached.paths[seed_idx], score=1.0)
-        )
+        # Emit each seed in input order, with score 1.0 (perfect self-match).
+        for sid, idx in zip(req.seed_ids, seed_indices):
+            chosen.append(
+                Match(track_id=sid, path=cached.paths[idx], score=1.0)
+            )
 
-    anchor_emb: np.ndarray = cached.matrix[seed_idx]
+    # Centroid of the seed embeddings — used as the starting anchor. With
+    # one seed this collapses to that seed's vector. The anchor is L2-
+    # normalized so the cosine math downstream stays numerically clean.
+    anchor_emb = cached.matrix[seed_indices].mean(axis=0)
+    anchor_emb = l2_normalize_vec(
+        anchor_emb.astype(np.float32, copy=False)
+    )
+
     # `prev_*` track the immediately previous pick for consecutive-transition
-    # checks. They start at the seed (which is the implicit "previous" for
-    # the first chunk's first member, whether or not include_seed is true).
-    prev_bpm: Optional[float] = seed_row.get("bpm")
-    prev_key: Optional[str] = seed_row.get("key")
-    prev_scale: Optional[str] = seed_row.get("scale")
+    # checks. They start at the FIRST seed (same convention as the
+    # similar-mode generator). Once the walk picks a track, prev_* updates
+    # to that pick so consecutive-pair checks fire correctly.
+    first_seed = seed_rows[0]
+    prev_bpm: Optional[float] = first_seed.get("bpm")
+    prev_key: Optional[str] = first_seed.get("key")
+    prev_scale: Optional[str] = first_seed.get("scale")
 
     while len(chosen) < req.n:
         scores = cached.matrix @ anchor_emb  # cached rows are normalised
