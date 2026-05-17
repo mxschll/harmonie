@@ -604,3 +604,73 @@ class TestApiKeyAuth:
         should pass through unauthenticated."""
         c, _ = client
         assert c.get("/api/v1/status").status_code == 200
+
+
+
+# ---------------------------------------------------------------------------
+# Request logging middleware
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def logged_app():
+    """Bare FastAPI app with the request-logging middleware attached. Lets
+    the middleware tests run without standing up a full Analyzer."""
+    from harmonie.api.app import _log_requests
+
+    app = FastAPI()
+    app.middleware("http")(_log_requests)
+
+    @app.get("/probe")
+    def _probe():
+        return {"ok": True}
+
+    @app.get("/health")
+    def _health():
+        return {"status": "ok"}
+
+    @app.get("/boom")
+    def _boom():
+        raise RuntimeError("kaboom")
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+class TestRequestLogging:
+    def test_logs_method_path_status_duration(self, logged_app, caplog):
+        with caplog.at_level("INFO", logger="harmonie.api.requests"):
+            r = logged_app.get("/probe?x=1")
+        assert r.status_code == 200
+        records = [
+            rec for rec in caplog.records
+            if rec.name == "harmonie.api.requests"
+        ]
+        assert len(records) == 1
+        msg = records[0].getMessage()
+        assert "GET" in msg
+        assert "/probe?x=1" in msg  # query string included
+        assert "200" in msg
+        assert "ms)" in msg  # duration
+
+    def test_health_logged_at_debug_not_info(self, logged_app, caplog):
+        """Liveness probes shouldn't drown out real traffic at INFO."""
+        with caplog.at_level("DEBUG", logger="harmonie.api.requests"):
+            logged_app.get("/health")
+        records = [
+            rec for rec in caplog.records
+            if rec.name == "harmonie.api.requests"
+        ]
+        assert len(records) == 1
+        assert records[0].levelname == "DEBUG"
+
+    def test_unhandled_exception_still_logged_as_500(self, logged_app, caplog):
+        """If the handler raises, the line still gets logged with status=500.
+        Lets operators see failures even when no response was constructed."""
+        with caplog.at_level("INFO", logger="harmonie.api.requests"):
+            logged_app.get("/boom")
+        records = [
+            rec for rec in caplog.records
+            if rec.name == "harmonie.api.requests"
+        ]
+        assert len(records) == 1
+        assert "500" in records[0].getMessage()

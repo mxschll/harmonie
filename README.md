@@ -350,7 +350,6 @@ All settings come from environment variables (or a `.env` file in the working di
 | `HARMONIE_API_KEY` | (none) | If set, required in `X-API-Key` |
 | `HARMONIE_CORS_ORIGINS` | (none) | Comma-separated list to enable CORS |
 | `HARMONIE_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `HARMONIE_LOG_JSON` | `false` | Emit one-line JSON logs |
 
 
 ## Development

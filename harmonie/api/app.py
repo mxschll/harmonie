@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..analyzer import Analyzer, scheduler_loop
@@ -15,6 +16,44 @@ from ..config import Settings, get_settings
 from .routes import api_router, public_router
 
 logger = logging.getLogger("harmonie.api")
+access_logger = logging.getLogger("harmonie.api.requests")
+
+
+# Liveness probes hit /health constantly; logging every one of them at INFO
+# drowns out actual API traffic. Demote those to DEBUG.
+_QUIET_PATHS = frozenset({"/health"})
+
+
+async def _log_requests(request: Request, call_next):
+    """Log one line per HTTP request via the harmonie.api.requests logger.
+
+    Format: ``<client> <method> <path>[?<query>] -> <status> (<ms>ms)``.
+    Always logs, even when the handler raises — uses ``status=500`` as the
+    fallback for unhandled exceptions so callers can still see the failure.
+    Sub-logger ``harmonie.api.requests`` lets operators tune verbosity
+    independently of other harmonie logs.
+    """
+    start = time.monotonic()
+    status: int = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        duration_ms = (time.monotonic() - start) * 1000
+        client = request.client.host if request.client else "-"
+        path = request.url.path
+        if request.url.query:
+            path = f"{path}?{request.url.query}"
+        level = (
+            logging.DEBUG
+            if request.url.path in _QUIET_PATHS
+            else logging.INFO
+        )
+        access_logger.log(
+            level, "%s %s %s -> %d (%.1fms)",
+            client, request.method, path, status, duration_ms,
+        )
 
 
 def create_app(settings: Optional[Settings] = None) -> FastAPI:
@@ -58,6 +97,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         description="Audio similarity service.",
         lifespan=lifespan,
     )
+
+    # Register middleware before routers so it wraps every endpoint.
+    app.middleware("http")(_log_requests)
 
     if settings.cors_origins:
         app.add_middleware(

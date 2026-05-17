@@ -75,7 +75,6 @@ class Settings(BaseSettings):
 
     # Logging ------------------------------------------------------------
     log_level: str = Field(default="INFO")
-    log_json: bool = Field(default=False)
 
     # ------------------------------------------------------------------
 
@@ -147,20 +146,6 @@ def get_settings() -> Settings:
 
 def configure_logging(settings: Settings) -> None:
     """Set up root logging. Called once at process start."""
-    handler: dict
-    if settings.log_json:
-        handler = {
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stderr",
-            "formatter": "json",
-        }
-    else:
-        handler = {
-            "class": "logging.StreamHandler",
-            "stream": "ext://sys.stderr",
-            "formatter": "plain",
-        }
-
     config = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -169,11 +154,14 @@ def configure_logging(settings: Settings) -> None:
                 "format": "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
                 "datefmt": "%Y-%m-%dT%H:%M:%S",
             },
-            "json": {
-                "()": "harmonie.config._JSONFormatter",
+        },
+        "handlers": {
+            "default": {
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stderr",
+                "formatter": "plain",
             },
         },
-        "handlers": {"default": handler},
         "root": {"level": settings.log_level, "handlers": ["default"]},
         "loggers": {
             "tensorflow": {"level": "ERROR", "propagate": True},
@@ -181,30 +169,3 @@ def configure_logging(settings: Settings) -> None:
         },
     }
     logging.config.dictConfig(config)
-
-
-class _JSONFormatter(logging.Formatter):
-    """Minimal structured-log formatter."""
-
-    def format(self, record: logging.LogRecord) -> str:  # pragma: no cover - cosmetic
-        import json
-        from datetime import datetime, timezone
-
-        payload = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
-            "level": record.levelname,
-            "logger": record.name,
-            "msg": record.getMessage(),
-        }
-        if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
-        for key, value in record.__dict__.items():
-            if key.startswith("_") or key in {
-                "args", "msg", "levelname", "levelno", "pathname", "filename",
-                "module", "exc_info", "exc_text", "stack_info", "lineno",
-                "funcName", "created", "msecs", "relativeCreated", "thread",
-                "threadName", "processName", "process", "name", "asctime",
-            }:
-                continue
-            payload[key] = value
-        return json.dumps(payload, default=str)
