@@ -50,8 +50,12 @@ def test_upsert_replaces_existing(tmp_db_path, random_embedding, fake_descriptor
     try:
         e1 = random_embedding(dim=4, seed=1)
         e2 = random_embedding(dim=4, seed=2)
-        tid1 = _insert(db, path="/a.flac", embedding=e1, descriptors=fake_descriptors(bpm=120))
-        tid2 = _insert(db, path="/a.flac", embedding=e2, descriptors=fake_descriptors(bpm=140))
+        tid1 = _insert(
+            db, path="/a.flac", embedding=e1, descriptors=fake_descriptors(bpm=120)
+        )
+        tid2 = _insert(
+            db, path="/a.flac", embedding=e2, descriptors=fake_descriptors(bpm=140)
+        )
         assert tid1 == tid2  # same row, same id
         row = db.get_track_by_id(tid1)
         assert row["bpm"] == 140
@@ -95,7 +99,6 @@ def test_filter_by_key_set(tmp_db_path, random_embedding, fake_descriptors):
 
 
 def test_prune_missing_under_roots(tmp_path, random_embedding, fake_descriptors):
-    from pathlib import Path
 
     db_path = tmp_path / "test.db"
     db = Database(db_path)
@@ -106,8 +109,11 @@ def test_prune_missing_under_roots(tmp_path, random_embedding, fake_descriptors)
         lib_b = tmp_path / "lib_b"
         lib_a.mkdir()
         lib_b.mkdir()
-        for sub, name in [(lib_a, "kept.flac"), (lib_a, "gone.flac"),
-                          (lib_b, "untouched.flac")]:
+        for sub, name in [
+            (lib_a, "kept.flac"),
+            (lib_a, "gone.flac"),
+            (lib_b, "untouched.flac"),
+        ]:
             _insert(
                 db,
                 path=str(sub / name),
@@ -156,9 +162,7 @@ def test_descriptor_version_split(tmp_db_path, random_embedding, fake_descriptor
             embedding=emb,
             model="m1",
             descriptors=fake_descriptors(),
-            descriptor_version=DESCRIPTOR_VERSION - 1
-            if DESCRIPTOR_VERSION > 0
-            else 0,
+            descriptor_version=DESCRIPTOR_VERSION - 1 if DESCRIPTOR_VERSION > 0 else 0,
         )
         # If DESCRIPTOR_VERSION is 0 the test is trivially false, skip.
         if DESCRIPTOR_VERSION > 0:
@@ -214,9 +218,7 @@ def test_tags_and_library_columns_round_trip(
         db.close()
 
 
-def test_get_tracks_by_ids_bulk_lookup(
-    tmp_db_path, random_embedding, fake_descriptors
-):
+def test_get_tracks_by_ids_bulk_lookup(tmp_db_path, random_embedding, fake_descriptors):
     from harmonie.tags import Tags
 
     db = Database(tmp_db_path)
@@ -285,8 +287,17 @@ def test_descriptor_refresh_updates_tags(
 # ---------------------------------------------------------------------------
 
 
-def _add_track(db, path, *, library_root=None, relative_path=None,
-               artist=None, album=None, title=None, embedding=None):
+def _add_track(
+    db,
+    path,
+    *,
+    library_root=None,
+    relative_path=None,
+    artist=None,
+    album=None,
+    title=None,
+    embedding=None,
+):
     from harmonie.tags import Tags
 
     return db.upsert_track(
@@ -294,8 +305,7 @@ def _add_track(db, path, *, library_root=None, relative_path=None,
         size=1,
         mtime=1.0,
         duration=1.0,
-        embedding=embedding if embedding is not None else
-                  np.zeros(4, dtype=np.float32),
+        embedding=embedding if embedding is not None else np.zeros(4, dtype=np.float32),
         model="m1",
         descriptors=__import__(
             "harmonie.features", fromlist=["Descriptors"]
@@ -323,7 +333,8 @@ def test_find_track_by_relative_path(tmp_db_path):
     db = Database(tmp_db_path)
     try:
         _add_track(
-            db, "/srv/music/artist/song.flac",
+            db,
+            "/srv/music/artist/song.flac",
             library_root="/srv/music",
             relative_path="artist/song.flac",
         )
@@ -375,13 +386,18 @@ def test_find_track_path_takes_precedence_over_tags(tmp_db_path):
     db = Database(tmp_db_path)
     try:
         a = _add_track(
-            db, "/by-path.flac",
-            artist="DifferentArtist", album="X", title="Y",
+            db,
+            "/by-path.flac",
+            artist="DifferentArtist",
+            album="X",
+            title="Y",
         )
         _add_track(db, "/by-tags.flac", artist="A", album="B", title="C")
         row = db.find_track(
             path="/by-path.flac",
-            artist="A", album="B", title="C",
+            artist="A",
+            album="B",
+            title="C",
         )
         assert row is not None
         assert row["id"] == a

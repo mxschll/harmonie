@@ -18,7 +18,6 @@ from harmonie.playlist import (
     generate_vibe_playlist,
 )
 
-
 # ---------------------------------------------------------------------------
 # Camelot
 # ---------------------------------------------------------------------------
@@ -96,7 +95,9 @@ def test_similar_playlist_bpm_drift(make_db, fake_descriptors):
         _add(db, f"/n{i}", v, fake_descriptors(bpm=bpm))
 
     items = generate_similar_playlist(
-        db, index, SimilarPlaylistRequest(seed_ids=[seed], n=10, bpm_drift=8),
+        db,
+        index,
+        SimilarPlaylistRequest(seed_ids=[seed], n=10, bpm_drift=8),
     )
     bpms = [db.get_track_by_id(m.track_id)["bpm"] for m in items]
     prev = 128
@@ -114,17 +115,20 @@ def test_similar_playlist_harmonic_mix(make_db, fake_descriptors):
     seed = _add(db, "/seed", seed_emb, fake_descriptors(key="A", scale="minor"))
     # One compatible track, one incompatible.
     compat = _add(
-        db, "/compat",
+        db,
+        "/compat",
         seed_emb + 0.05 * rng.standard_normal(4).astype(np.float32),
         fake_descriptors(key="C", scale="major"),
     )
     _add(
-        db, "/incompat",
+        db,
+        "/incompat",
         seed_emb + 0.05 * rng.standard_normal(4).astype(np.float32),
         fake_descriptors(key="F#", scale="major"),
     )
     items = generate_similar_playlist(
-        db, index,
+        db,
+        index,
         SimilarPlaylistRequest(seed_ids=[seed], n=10, harmonic_mix=True),
     )
     ids = {m.track_id for m in items}
@@ -224,13 +228,16 @@ def test_chained_chunk_size_one_is_greedy_walk(make_db, fake_descriptors):
 
 def test_chained_stops_when_candidates_exhausted(make_db, fake_descriptors):
     db, index = make_db()
-    seed = _add(db, "/seed",
-                np.array([1.0, 0, 0, 0], dtype=np.float32),
-                fake_descriptors())
+    seed = _add(
+        db, "/seed", np.array([1.0, 0, 0, 0], dtype=np.float32), fake_descriptors()
+    )
     for i in range(3):
-        _add(db, f"/n{i}",
-             np.array([0.9, 0.1 * (i + 1), 0, 0], dtype=np.float32),
-             fake_descriptors())
+        _add(
+            db,
+            f"/n{i}",
+            np.array([0.9, 0.1 * (i + 1), 0, 0], dtype=np.float32),
+            fake_descriptors(),
+        )
     items = generate_chained_playlist(
         db, index, ChainedPlaylistRequest(seed_ids=[seed], chunk_size=5, n=100)
     )
@@ -248,9 +255,12 @@ def test_chained_filter_applied(make_db, fake_descriptors):
         _add(db, f"/n{i}", v, fake_descriptors(bpm=bpm))
 
     items = generate_chained_playlist(
-        db, index,
+        db,
+        index,
         ChainedPlaylistRequest(
-            seed_ids=[seed], chunk_size=3, n=10,
+            seed_ids=[seed],
+            chunk_size=3,
+            n=10,
             descriptor_filter=TrackFilter(bpm_min=120, bpm_max=140),
         ),
     )
@@ -268,7 +278,8 @@ def test_chained_include_seed(make_db, fake_descriptors):
         v = seed_emb + 0.1 * rng.standard_normal(4).astype(np.float32)
         _add(db, f"/n{i}", v, fake_descriptors())
     items = generate_chained_playlist(
-        db, index,
+        db,
+        index,
         ChainedPlaylistRequest(seed_ids=[seed], chunk_size=2, n=4, include_seed=True),
     )
     assert len(items) == 4
@@ -291,9 +302,13 @@ def test_chained_respects_bpm_tolerance(make_db, fake_descriptors):
         _add(db, f"/n{i}", v, fake_descriptors(bpm=bpm))
 
     items = generate_chained_playlist(
-        db, index,
+        db,
+        index,
         ChainedPlaylistRequest(
-            seed_ids=[seed], chunk_size=3, n=10, bpm_drift=6,
+            seed_ids=[seed],
+            chunk_size=3,
+            n=10,
+            bpm_drift=6,
         ),
     )
     assert len(items) > 0
@@ -312,13 +327,22 @@ def test_chained_respects_key_compatible(make_db, fake_descriptors):
     rng = np.random.default_rng(22)
     seed_emb = rng.standard_normal(4).astype(np.float32)
     seed = _add(
-        db, "/seed", seed_emb, fake_descriptors(key="A", scale="minor"),
+        db,
+        "/seed",
+        seed_emb,
+        fake_descriptors(key="A", scale="minor"),
     )
     # Mix compatible (A minor, C major, D minor, E minor) and incompatible
     # (F# major, B minor in 10A) keys.
     keys_to_use = [
-        ("A", "minor"), ("C", "major"), ("D", "minor"), ("E", "minor"),
-        ("F#", "major"), ("F", "minor"), ("G", "major"), ("Bb", "major"),
+        ("A", "minor"),
+        ("C", "major"),
+        ("D", "minor"),
+        ("E", "minor"),
+        ("F#", "major"),
+        ("F", "minor"),
+        ("G", "major"),
+        ("Bb", "major"),
     ]
     for i in range(40):
         v = seed_emb + 0.1 * rng.standard_normal(4).astype(np.float32)
@@ -326,9 +350,13 @@ def test_chained_respects_key_compatible(make_db, fake_descriptors):
         _add(db, f"/n{i}", v, fake_descriptors(key=k, scale=s))
 
     items = generate_chained_playlist(
-        db, index,
+        db,
+        index,
         ChainedPlaylistRequest(
-            seed_ids=[seed], chunk_size=4, n=12, harmonic_mix=True,
+            seed_ids=[seed],
+            chunk_size=4,
+            n=12,
+            harmonic_mix=True,
         ),
     )
     assert len(items) > 0
@@ -352,7 +380,9 @@ def test_chained_combines_bpm_and_key_constraints(make_db, fake_descriptors):
     rng = np.random.default_rng(33)
     seed_emb = rng.standard_normal(4).astype(np.float32)
     seed = _add(
-        db, "/seed", seed_emb,
+        db,
+        "/seed",
+        seed_emb,
         fake_descriptors(key="A", scale="minor", bpm=128),
     )
     keys = [("A", "minor"), ("C", "major"), ("D", "minor"), ("E", "minor")]
@@ -362,10 +392,14 @@ def test_chained_combines_bpm_and_key_constraints(make_db, fake_descriptors):
         _add(db, f"/n{i}", v, fake_descriptors(key=k, scale=s, bpm=124 + (i % 5)))
 
     items = generate_chained_playlist(
-        db, index,
+        db,
+        index,
         ChainedPlaylistRequest(
-            seed_ids=[seed], chunk_size=3, n=8,
-            bpm_drift=4, harmonic_mix=True,
+            seed_ids=[seed],
+            chunk_size=3,
+            n=8,
+            bpm_drift=4,
+            harmonic_mix=True,
         ),
     )
     prev = (128, "A", "minor")
@@ -375,7 +409,6 @@ def test_chained_combines_bpm_and_key_constraints(make_db, fake_descriptors):
         assert abs(bpm - prev[0]) <= 4
         assert (key, scale) in compatible_keys_for(prev[1], prev[2])
         prev = (bpm, key, scale)
-
 
 
 def test_chained_multiseed_uses_centroid_anchor(make_db, fake_descriptors):
@@ -406,9 +439,12 @@ def test_chained_multiseed_uses_centroid_anchor(make_db, fake_descriptors):
         _add(db, f"/far{i}", v, fake_descriptors())
 
     items = generate_chained_playlist(
-        db, index,
+        db,
+        index,
         ChainedPlaylistRequest(
-            seed_ids=[sid_a, sid_b], chunk_size=3, n=3,
+            seed_ids=[sid_a, sid_b],
+            chunk_size=3,
+            n=3,
         ),
     )
     assert len(items) == 3
@@ -424,16 +460,21 @@ def test_chained_multiseed_include_seed_emits_each(make_db, fake_descriptors):
     rng = np.random.default_rng(202)
     seed_emb = rng.standard_normal(4).astype(np.float32)
     sid_x = _add(db, "/seed_x", seed_emb, fake_descriptors())
-    sid_y = _add(db, "/seed_y", seed_emb + 0.1 * rng.standard_normal(4),
-                 fake_descriptors())
+    sid_y = _add(
+        db, "/seed_y", seed_emb + 0.1 * rng.standard_normal(4), fake_descriptors()
+    )
     for i in range(8):
         v = seed_emb + 0.2 * rng.standard_normal(4).astype(np.float32)
         _add(db, f"/n{i}", v, fake_descriptors())
 
     items = generate_chained_playlist(
-        db, index,
+        db,
+        index,
         ChainedPlaylistRequest(
-            seed_ids=[sid_x, sid_y], chunk_size=3, n=6, include_seed=True,
+            seed_ids=[sid_x, sid_y],
+            chunk_size=3,
+            n=6,
+            include_seed=True,
         ),
     )
     assert len(items) == 6

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -75,7 +75,5 @@ def make_db(tmp_path: Path):
 
     yield _factory
     for db in created:
-        try:
+        with contextlib.suppress(Exception):
             db.close()
-        except Exception:
-            pass

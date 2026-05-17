@@ -8,6 +8,7 @@ Architecture, scaling notes, and contribution workflow for harmonie. See [README
 - [How it works](#how-it-works)
 - [Architecture](#architecture)
 - [Scaling](#scaling)
+- [Lint and format](#lint-and-format)
 - [Tests](#tests)
 - [Schema migrations](#schema-migrations)
 
@@ -68,6 +69,19 @@ The two-version split (`model` vs `descriptor_version`) lets a descriptor-algori
 * 100k tracks × 1280 floats = 512 MB of embeddings in memory plus the model and overhead. Expect 1.5–2 GB RSS.
 * Initial scans of large libraries are CPU-bound at ~4 s/track. Scale `HARMONIE_WORKERS` to your core count; each worker holds its own copy of the model (~200 MB).
 * SQLite is fine to several million rows. Move to Postgres only if you want multiple service instances sharing one DB.
+
+## Lint and format
+
+Ruff handles both. Configuration lives in `[tool.ruff]` in `pyproject.toml`.
+
+```bash
+ruff check .          # lint
+ruff format .         # apply formatting
+ruff format --check . # CI-style: fail if anything would change
+ruff check --fix .    # auto-fix what's safely fixable
+```
+
+CI runs `ruff check` and `ruff format --check` on every push and pull request via `.github/workflows/lint.yml`. Failures block the build.
 
 ## Tests
 

@@ -6,7 +6,9 @@
 #   2. importlib.metadata (works inside an installed wheel even if step 1 missed).
 #   3. A literal fallback for editable / source checkouts without git history.
 try:
-    from harmonie._version import version as __version__  # type: ignore[import-not-found]
+    from harmonie._version import (
+        version as __version__,  # type: ignore[import-not-found]
+    )
 except ImportError:
     try:
         from importlib.metadata import version as _pkg_version

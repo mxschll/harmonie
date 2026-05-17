@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Optional, Union
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
 from .filters import FilterBody
-
 
 # ---------------------------------------------------------------------------
 # Track resource
@@ -25,7 +24,9 @@ class StyleScore(BaseModel):
         ),
     )
     probability: float = Field(
-        ..., ge=0.0, le=1.0,
+        ...,
+        ge=0.0,
+        le=1.0,
         description="Sigmoid output from the classifier head.",
     )
 
@@ -35,19 +36,19 @@ class TrackSummary(BaseModel):
 
     id: int
     path: str
-    library_root: Optional[str] = None
-    relative_path: Optional[str] = None
+    library_root: str | None = None
+    relative_path: str | None = None
     duration: float
     model: str
-    artist: Optional[str] = None
-    album: Optional[str] = None
-    title: Optional[str] = None
-    track_number: Optional[int] = None
-    bpm: Optional[float] = None
-    key: Optional[str] = None
-    scale: Optional[str] = None
-    danceability: Optional[float] = None
-    loudness: Optional[float] = None
+    artist: str | None = None
+    album: str | None = None
+    title: str | None = None
+    track_number: int | None = None
+    bpm: float | None = None
+    key: str | None = None
+    scale: str | None = None
+    danceability: float | None = None
+    loudness: float | None = None
     styles: list[StyleScore] = Field(default_factory=list)
 
 
@@ -58,9 +59,9 @@ class Track(TrackSummary):
     mtime: float
     embedding_dim: int
     descriptor_version: int
-    bpm_confidence: Optional[float] = None
-    key_strength: Optional[float] = None
-    onset_rate: Optional[float] = None
+    bpm_confidence: float | None = None
+    key_strength: float | None = None
+    onset_rate: float | None = None
     analyzed_at: float
 
 
@@ -107,12 +108,12 @@ class MatchOut(BaseModel):
     track_id: int
     path: str
     score: float
-    library_root: Optional[str] = None
-    relative_path: Optional[str] = None
-    artist: Optional[str] = None
-    album: Optional[str] = None
-    title: Optional[str] = None
-    track_number: Optional[int] = None
+    library_root: str | None = None
+    relative_path: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    title: str | None = None
+    track_number: int | None = None
     styles: list[StyleScore] = Field(default_factory=list)
 
 
@@ -131,22 +132,19 @@ class SeedRef(BaseModel):
     same ladder as ``GET /tracks/resolve``. At least one field must be set.
     """
 
-    path: Optional[str] = Field(
+    path: str | None = Field(
         None,
-        description=(
-            "Absolute or library-relative path. Tried before tag matching."
-        ),
+        description=("Absolute or library-relative path. Tried before tag matching."),
     )
-    artist: Optional[str] = None
-    album: Optional[str] = None
-    title: Optional[str] = None
+    artist: str | None = None
+    album: str | None = None
+    title: str | None = None
 
     @model_validator(mode="after")
-    def _at_least_one_field(self) -> "SeedRef":
+    def _at_least_one_field(self) -> SeedRef:
         if not (self.path or self.artist or self.album or self.title):
             raise ValueError(
-                "seed_refs entries must set at least one of: "
-                "path, artist, album, title"
+                "seed_refs entries must set at least one of: path, artist, album, title"
             )
         return self
 
@@ -158,8 +156,7 @@ class UnresolvedSeedRef(BaseModel):
     reason: Literal["no_match"] = Field(
         "no_match",
         description=(
-            "Why this ref didn't resolve. ``no_match`` is the only "
-            "current value."
+            "Why this ref didn't resolve. ``no_match`` is the only current value."
         ),
     )
 
@@ -184,8 +181,9 @@ class _SmoothTransitions(BaseModel):
     """Consecutive-pair smoothness rules used by ``similar`` and ``drift``
     modes; ignored by ``vibe`` mode."""
 
-    bpm_tolerance: Optional[float] = Field(
-        None, ge=0,
+    bpm_tolerance: float | None = Field(
+        None,
+        ge=0,
         description=(
             "Maximum BPM gap allowed between consecutive picks. Lenient on "
             "missing BPMs (skip the check rather than reject the candidate)."
@@ -204,13 +202,13 @@ class _SmoothTransitions(BaseModel):
 class _DescriptorTarget(BaseModel):
     """Soft ranking preferences for ``vibe`` mode."""
 
-    bpm: Optional[float] = Field(None, gt=0)
-    danceability: Optional[float] = Field(None, ge=0)
+    bpm: float | None = Field(None, gt=0)
+    danceability: float | None = Field(None, ge=0)
 
 
 class _PlaylistCommon(BaseModel):
     n: int = Field(20, ge=1, le=500, description="Number of tracks to return.")
-    filter: Optional[FilterBody] = Field(
+    filter: FilterBody | None = Field(
         None,
         description="Hard constraints on the candidate pool.",
     )
@@ -237,11 +235,9 @@ class _SeededPlaylist(_PlaylistCommon):
     )
 
     @model_validator(mode="after")
-    def _at_least_one_seed(self) -> "_SeededPlaylist":
+    def _at_least_one_seed(self) -> _SeededPlaylist:
         if not self.seeds and not self.seed_refs:
-            raise ValueError(
-                "playlist requires at least one of: seeds, seed_refs"
-            )
+            raise ValueError("playlist requires at least one of: seeds, seed_refs")
         return self
 
 
@@ -255,7 +251,8 @@ class SimilarPlaylist(_SeededPlaylist):
         description="Optional consecutive-pair smoothness rules.",
     )
     include_seeds: bool = Field(
-        False, description="Include the seed tracks in the result.",
+        False,
+        description="Include the seed tracks in the result.",
     )
 
 
@@ -270,7 +267,9 @@ class DriftPlaylist(_SeededPlaylist):
 
     mode: Literal["drift"]
     chunk_size: int = Field(
-        5, ge=1, le=100,
+        5,
+        ge=1,
+        le=100,
         description=(
             "Tracks per anchor. Larger stays closer to the seeds; smaller "
             "drifts faster."
@@ -295,8 +294,9 @@ class VibePlaylist(_PlaylistCommon):
         True,
         description="Shuffle the (post-target) pool before truncating to n.",
     )
-    rng_seed: Optional[int] = Field(
-        None, description="Seed for the shuffle. Null = fresh randomness.",
+    rng_seed: int | None = Field(
+        None,
+        description="Seed for the shuffle. Null = fresh randomness.",
     )
 
 
@@ -351,10 +351,10 @@ class ScanState(BaseModel):
             "``idle`` when no scan is running."
         ),
     )
-    started_at: Optional[float] = None
-    finished_at: Optional[float] = None
-    last_duration_sec: Optional[float] = None
-    last_error: Optional[str] = None
+    started_at: float | None = None
+    finished_at: float | None = None
+    last_duration_sec: float | None = None
+    last_error: str | None = None
     discovered: int = 0
     full: int = 0
     descriptors_only: int = 0

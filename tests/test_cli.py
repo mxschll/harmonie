@@ -23,15 +23,19 @@ from harmonie.config import Settings
 from harmonie.features import DESCRIPTOR_VERSION, Descriptors
 from harmonie.tags import Tags
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
 def _populate(
-    db, lib_root: Path, name: str, *,
-    bpm: float, key: str = "A", scale: str = "minor",
+    db,
+    lib_root: Path,
+    name: str,
+    *,
+    bpm: float,
+    key: str = "A",
+    scale: str = "minor",
 ):
     path = str(lib_root / name)
     return db.upsert_track(
@@ -42,8 +46,12 @@ def _populate(
         embedding=np.ones(4, dtype=np.float32),
         model="m1",
         descriptors=Descriptors(
-            bpm=bpm, key=key, scale=scale,
-            loudness=-12.0, danceability=1.5, onset_rate=4.2,
+            bpm=bpm,
+            key=key,
+            scale=scale,
+            loudness=-12.0,
+            danceability=1.5,
+            onset_rate=4.2,
         ),
         descriptor_version=DESCRIPTOR_VERSION,
         tags=Tags(artist=name, title=name.replace(".flac", "")),
@@ -153,7 +161,7 @@ class TestInfo:
         rc = main(["info", str(track_id)])
         assert rc == 0
         out = capsys.readouterr().out
-        assert f"ID:" in out
+        assert "ID:" in out
         assert "BPM:" in out
         assert "Key:" in out
         assert "Loudness" in out

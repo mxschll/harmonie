@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -35,9 +35,7 @@ def harness(tmp_path: Path, monkeypatch):
         observations.append(("build_jobs", analyzer.status.phase))
         if on_progress is not None:
             on_progress(len(files))
-        jobs = [
-            FullJob(path=str(f), size=1, mtime=1.0) for f in files
-        ]
+        jobs = [FullJob(path=str(f), size=1, mtime=1.0) for f in files]
         return jobs, [], 0
 
     monkeypatch.setattr(analyzer_mod, "build_jobs", fake_build_jobs)
@@ -111,7 +109,8 @@ def test_scan_with_no_jobs_skips_extracting(tmp_path, monkeypatch):
         observations: list[str] = []
 
         monkeypatch.setattr(
-            analyzer_mod, "iter_audio_files",
+            analyzer_mod,
+            "iter_audio_files",
             lambda roots: iter([Path("/lib/a.flac")]),
         )
 
@@ -130,7 +129,8 @@ def test_scan_with_no_jobs_skips_extracting(tmp_path, monkeypatch):
 
         analyzer.pool = TripwirePool()
         monkeypatch.setattr(
-            analyzer.db, "prune_missing_under_roots",
+            analyzer.db,
+            "prune_missing_under_roots",
             lambda *, roots, keep: 0,
         )
 

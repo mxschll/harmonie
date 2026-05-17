@@ -35,12 +35,9 @@ Both shapes build the same ``TrackFilter``.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field, model_validator
 
 from ..db import TrackFilter
-
 
 # ---------------------------------------------------------------------------
 # Range objects (used in body filters)
@@ -50,11 +47,11 @@ from ..db import TrackFilter
 class FloatRange(BaseModel):
     """Inclusive numeric range. Either bound may be omitted."""
 
-    gte: Optional[float] = None
-    lte: Optional[float] = None
+    gte: float | None = None
+    lte: float | None = None
 
     @model_validator(mode="after")
-    def _check_bounds(self) -> "FloatRange":
+    def _check_bounds(self) -> FloatRange:
         if self.gte is not None and self.lte is not None and self.gte > self.lte:
             raise ValueError(f"gte ({self.gte}) must be <= lte ({self.lte})")
         return self
@@ -74,12 +71,12 @@ class FilterBody(BaseModel):
     Every field is optional. Missing fields mean "no constraint."
     """
 
-    bpm: Optional[FloatRange] = None
-    danceability: Optional[FloatRange] = None
-    loudness: Optional[FloatRange] = None
-    key: Optional[list[str]] = None
-    scale: Optional[str] = None
-    style: Optional[list[str]] = Field(
+    bpm: FloatRange | None = None
+    danceability: FloatRange | None = None
+    loudness: FloatRange | None = None
+    key: list[str] | None = None
+    scale: str | None = None
+    style: list[str] | None = Field(
         None,
         description=(
             "Discogs-400 style filter. Each entry is either a full "
@@ -88,11 +85,14 @@ class FilterBody(BaseModel):
         ),
     )
     style_min: float = Field(
-        0.0, ge=0.0, le=1.0,
+        0.0,
+        ge=0.0,
+        le=1.0,
         description="Minimum classifier probability for a style row to count.",
     )
     style_mode: str = Field(
-        "any", pattern="^(any|all)$",
+        "any",
+        pattern="^(any|all)$",
         description="``any`` (default) or ``all`` of the requested styles.",
     )
 
@@ -120,7 +120,7 @@ class FilterBody(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def parse_range(value: Optional[str]) -> FloatRange:
+def parse_range(value: str | None) -> FloatRange:
     """Parse a query-string range into a :class:`FloatRange`.
 
     Accepts ``"120..130"`` (closed), ``"120.."`` (lower only), ``"..130"``
@@ -143,12 +143,12 @@ def parse_range(value: Optional[str]) -> FloatRange:
 
 def build_track_filter(
     *,
-    bpm: Optional[str] = None,
-    danceability: Optional[str] = None,
-    loudness: Optional[str] = None,
-    key: Optional[list[str]] = None,
-    scale: Optional[str] = None,
-    style: Optional[list[str]] = None,
+    bpm: str | None = None,
+    danceability: str | None = None,
+    loudness: str | None = None,
+    key: list[str] | None = None,
+    scale: str | None = None,
+    style: list[str] | None = None,
     style_min: float = 0.0,
     style_mode: str = "any",
 ) -> TrackFilter:

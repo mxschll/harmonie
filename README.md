@@ -2,6 +2,7 @@
 
 [![Tests (Python 3.9)](https://github.com/mxschll/harmonie/actions/workflows/tests-py39.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests-py39.yml)
 [![Tests (Python 3.11)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml)
+[![Lint](https://github.com/mxschll/harmonie/actions/workflows/lint.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/lint.yml)
 
 Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate), classifies each track against the 400 Discogs styles (House, Techno, Trap, Punk, ...), and reads file tags (artist, album, title, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/). Everything is stored in SQLite and exposed via an HTTP API for similarity queries, style-filtered listings, and playlist generation.
 

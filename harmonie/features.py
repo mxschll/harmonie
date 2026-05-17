@@ -31,7 +31,7 @@ import logging
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -99,14 +99,14 @@ class Descriptors:
     """Musical metadata for one track. Missing values mean the algorithm
     couldn't be applied or failed."""
 
-    bpm: Optional[float] = None
-    bpm_confidence: Optional[float] = None  # ~[0, 5.32]; >1.5 ~ confident
-    key: Optional[str] = None  # e.g. "A", "F#"
-    scale: Optional[str] = None  # "major" / "minor"
-    key_strength: Optional[float] = None  # [0, 1]
-    loudness: Optional[float] = None  # ReplayGain, dB
-    danceability: Optional[float] = None  # ~[0, 3]
-    onset_rate: Optional[float] = None  # onsets per second
+    bpm: float | None = None
+    bpm_confidence: float | None = None  # ~[0, 5.32]; >1.5 ~ confident
+    key: str | None = None  # e.g. "A", "F#"
+    scale: str | None = None  # "major" / "minor"
+    key_strength: float | None = None  # [0, 1]
+    loudness: float | None = None  # ReplayGain, dB
+    danceability: float | None = None  # ~[0, 3]
+    onset_rate: float | None = None  # onsets per second
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -122,7 +122,7 @@ class TrackFeatures:
     descriptors: Descriptors = field(default_factory=Descriptors)
     # Discogs-400 style probabilities, shape (400,) float32, post-sigmoid.
     # ``None`` for backends that don't produce Effnet-compatible embeddings.
-    style_activations: Optional[np.ndarray] = None
+    style_activations: np.ndarray | None = None
 
     @property
     def dim(self) -> int:
@@ -307,9 +307,9 @@ class EffnetExtractor:
 
     def __init__(
         self,
-        model_path: Optional[Path] = None,
+        model_path: Path | None = None,
         *,
-        genre_head_path: Optional[Path] = None,
+        genre_head_path: Path | None = None,
         load_genre_head: bool = True,
     ) -> None:
         try:
@@ -336,7 +336,7 @@ class EffnetExtractor:
         # Genre head + label table. Loaded lazily so a network blip
         # during model download falls through to embeddings-only output.
         self._genre_head = None
-        self._genre_labels: Optional[list[str]] = None
+        self._genre_labels: list[str] | None = None
         if load_genre_head:
             try:
                 from essentia.standard import TensorflowPredict2D
@@ -352,13 +352,14 @@ class EffnetExtractor:
             except Exception as e:  # pragma: no cover
                 logger.warning(
                     "genre head unavailable; tracks will be indexed without "
-                    "style activations (%s)", e,
+                    "style activations (%s)",
+                    e,
                 )
                 self._genre_head = None
                 self._genre_labels = None
 
     @property
-    def genre_labels(self) -> Optional[list[str]]:
+    def genre_labels(self) -> list[str] | None:
         return self._genre_labels
 
     def _load_44k(self, path: Path) -> np.ndarray:
@@ -389,14 +390,11 @@ class EffnetExtractor:
         # Style activations: run the head on each per-frame embedding and
         # average the per-frame probabilities. Note sigmoid(mean(emb)) is
         # not equivalent to mean(sigmoid(head(emb))).
-        style_activations: Optional[np.ndarray] = None
+        style_activations: np.ndarray | None = None
         if self._genre_head is not None:
             try:
                 act_frames = self._genre_head(emb_frames)
-                if (
-                    act_frames.ndim != 2
-                    or act_frames.shape[1] != GENRE_NUM_CLASSES
-                ):
+                if act_frames.ndim != 2 or act_frames.shape[1] != GENRE_NUM_CLASSES:
                     raise ValueError(
                         f"unexpected genre head output shape {act_frames.shape}"
                     )
@@ -405,7 +403,9 @@ class EffnetExtractor:
                 )
             except Exception as e:  # pragma: no cover
                 logger.warning(
-                    "style classification failed for %s: %s", path, e,
+                    "style classification failed for %s: %s",
+                    path,
+                    e,
                 )
 
         return TrackFeatures(

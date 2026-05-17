@@ -8,7 +8,6 @@ vectors and compose the optional descriptor-filter gate.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from .db import Database, TrackFilter
 from .index import EmbeddingIndex, IndexMatch
@@ -31,7 +30,7 @@ def find_similar_to_id(
     track_id: int,
     *,
     n: int = 10,
-    filter: Optional[TrackFilter] = None,
+    filter: TrackFilter | None = None,
     include_self: bool = False,
 ) -> list[Match]:
     """Top-N similar to the track with the given id.
@@ -52,7 +51,7 @@ def find_similar_to_id(
     # to search() — search() will re-normalise (cheap) and run the matmul.
     query_vec = cached.matrix[row_idx]
 
-    allowed_ids: Optional[set[int]] = None
+    allowed_ids: set[int] | None = None
     if filter is not None and not filter.is_empty():
         allowed_ids = db.filtered_ids(filter=filter, model=model)
 

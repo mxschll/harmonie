@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -87,7 +86,7 @@ class EmbeddingIndex:
 
     # -- cache management ---------------------------------------------
 
-    def invalidate(self, model: Optional[str] = None) -> None:
+    def invalidate(self, model: str | None = None) -> None:
         """Drop cached matrices. Called by the analyzer after every scan."""
         with self._lock:
             if model is None:
@@ -119,7 +118,10 @@ class EmbeddingIndex:
         )
         logger.info(
             "index: built model=%s tracks=%d dim=%d size=%.1fMiB",
-            model, len(ids), norm.shape[1], norm.nbytes / (1024 * 1024),
+            model,
+            len(ids),
+            norm.shape[1],
+            norm.nbytes / (1024 * 1024),
         )
         return cached
 
@@ -131,9 +133,9 @@ class EmbeddingIndex:
         *,
         model: str,
         n: int,
-        allowed_ids: Optional[set[int]] = None,
-        exclude_ids: Optional[set[int]] = None,
-    ) -> list["IndexMatch"]:
+        allowed_ids: set[int] | None = None,
+        exclude_ids: set[int] | None = None,
+    ) -> list[IndexMatch]:
         """Return the top-``n`` matches against ``query`` (a raw, un-normalised
         embedding) for the given ``model``.
 
@@ -144,9 +146,7 @@ class EmbeddingIndex:
         if cached.empty:
             return []
         if query.shape[0] != cached.dim:
-            raise ValueError(
-                f"query dim {query.shape[0]} != index dim {cached.dim}"
-            )
+            raise ValueError(f"query dim {query.shape[0]} != index dim {cached.dim}")
 
         q = l2_normalize_vec(query.astype(np.float32, copy=False))
         scores = cached.matrix @ q  # (N,)

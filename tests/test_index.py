@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from harmonie.features import DESCRIPTOR_VERSION
-from harmonie.index import EmbeddingIndex, l2_normalize_vec
+from harmonie.index import l2_normalize_vec
 
 
 def _add(db, path, emb, fake_descriptors, model="m1"):
@@ -77,8 +77,9 @@ def test_index_search_orders_by_score(make_db, fake_descriptors):
     _add(db, "/v3", np.array([0.0, 0, 1.0, 0], dtype=np.float32), fake_descriptors)
     q = np.array([0.99, 0.01, 0, 0], dtype=np.float32)
     matches = index.search(q, model="m1", n=3)
-    assert [m.path for m in matches[:2]] == ["/v1", "/v2"] or \
-           [m.path for m in matches[:2]] == ["/v2", "/v1"]
+    assert [m.path for m in matches[:2]] == ["/v1", "/v2"] or [
+        m.path for m in matches[:2]
+    ] == ["/v2", "/v1"]
     # /v3 is orthogonal — last.
     assert matches[-1].path == "/v3"
 

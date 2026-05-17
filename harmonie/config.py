@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 import logging.config
 import os
-import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -70,7 +69,7 @@ class Settings(BaseSettings):
     # HTTP API -----------------------------------------------------------
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8842, ge=1, le=65535)
-    api_key: Optional[str] = Field(default=None)
+    api_key: str | None = Field(default=None)
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     # Logging ------------------------------------------------------------
@@ -128,7 +127,7 @@ class Settings(BaseSettings):
         return max(1, os.cpu_count() or 1)
 
 
-_settings: Optional[Settings] = None
+_settings: Settings | None = None
 
 
 def get_settings() -> Settings:

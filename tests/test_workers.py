@@ -27,9 +27,7 @@ def stub_extractor(monkeypatch):
     return sentinel
 
 
-def test_worker_init_silences_essentia_warnings_at_info(
-    stub_essentia, stub_extractor
-):
+def test_worker_init_silences_essentia_warnings_at_info(stub_essentia, stub_extractor):
     from harmonie.workers import _worker_init
 
     _worker_init("effnet", "INFO")
@@ -102,8 +100,5 @@ def test_do_descriptors_logs_refreshing_line(monkeypatch, caplog):
         result = workers_mod._do_descriptors(job)
 
     msgs = [r.getMessage() for r in caplog.records]
-    assert any(
-        "refreshing descriptors" in m and "/lib/track-2.flac" in m
-        for m in msgs
-    )
+    assert any("refreshing descriptors" in m and "/lib/track-2.flac" in m for m in msgs)
     assert isinstance(result, workers_mod.JobError)

@@ -25,7 +25,6 @@ from harmonie.config import Settings
 from harmonie.features import Descriptors
 from harmonie.tags import Tags
 
-
 # ---------------------------------------------------------------------------
 # Range parser
 # ---------------------------------------------------------------------------
@@ -97,7 +96,9 @@ class TestBuildTrackFilter:
 
     def test_style_min_and_mode(self):
         f = build_track_filter(
-            style=["Rock"], style_min=0.5, style_mode="all",
+            style=["Rock"],
+            style_min=0.5,
+            style_mode="all",
         )
         assert f.style_min_probability == 0.5
         assert f.style_match == "all"
@@ -110,15 +111,17 @@ class TestBuildTrackFilter:
 
 class TestFilterBody:
     def test_body_to_track_filter_round_trip(self):
-        body = FilterBody.model_validate({
-            "bpm": {"gte": 120, "lte": 130},
-            "loudness": {"lte": -10},
-            "key": ["A", "B"],
-            "scale": "minor",
-            "style": ["Electronic"],
-            "style_min": 0.5,
-            "style_mode": "all",
-        })
+        body = FilterBody.model_validate(
+            {
+                "bpm": {"gte": 120, "lte": 130},
+                "loudness": {"lte": -10},
+                "key": ["A", "B"],
+                "scale": "minor",
+                "style": ["Electronic"],
+                "style_min": 0.5,
+                "style_mode": "all",
+            }
+        )
         f = body.to_track_filter()
         assert f.bpm_min == 120 and f.bpm_max == 130
         assert f.loudness_min is None and f.loudness_max == -10
@@ -146,6 +149,7 @@ class TestFilterBody:
 
 def _stub_analyzer(db, index, settings, embedding_dim=4):
     """Minimal stand-in for the full Analyzer, just enough for the routes."""
+
     class _Status:
         state = "idle"
 
@@ -157,8 +161,12 @@ def _stub_analyzer(db, index, settings, embedding_dim=4):
                 "finished_at": None,
                 "last_duration_sec": None,
                 "last_error": None,
-                "discovered": 0, "full": 0, "descriptors_only": 0,
-                "skipped": 0, "failed": 0, "removed": 0,
+                "discovered": 0,
+                "full": 0,
+                "descriptors_only": 0,
+                "skipped": 0,
+                "failed": 0,
+                "removed": 0,
                 "recent_failures": [],
             }
 
@@ -182,7 +190,11 @@ def _populate(db, name, *, bpm=128, loudness=-12, key="A", scale="minor"):
         embedding=np.zeros(4, dtype=np.float32),
         model="m1",
         descriptors=Descriptors(
-            bpm=bpm, key=key, scale=scale, loudness=loudness, danceability=1.5,
+            bpm=bpm,
+            key=key,
+            scale=scale,
+            loudness=loudness,
+            danceability=1.5,
         ),
         descriptor_version=1,
         tags=Tags(artist=name, title=name.replace(".flac", "")),
@@ -218,8 +230,13 @@ class TestHealthAndInfo:
         assert r.status_code == 200, r.text
         body = r.json()
         # Identity / config (was /info).
-        assert {"version", "backend", "libraries", "schema_version",
-                "descriptor_version"} <= body.keys()
+        assert {
+            "version",
+            "backend",
+            "libraries",
+            "schema_version",
+            "descriptor_version",
+        } <= body.keys()
         # Counters (was /stats).
         assert body["tracks"] == db.stats()["tracks"]
         assert "by_model" in body
@@ -392,7 +409,8 @@ class TestPlaylistDiscriminator:
         r = c.post(
             "/api/v1/playlists",
             json={
-                "mode": "similar", "n": 2,
+                "mode": "similar",
+                "n": 2,
                 "seeds": [track_id],
                 "bpm_tolerance": 5,  # was top-level; now under smooth_transitions
             },
@@ -406,15 +424,16 @@ class TestPlaylistDiscriminator:
         r = c.post(
             "/api/v1/playlists",
             json={
-                "mode": "similar", "n": 2,
+                "mode": "similar",
+                "n": 2,
                 "seeds": [track_id],
                 "smooth_transitions": {
-                    "bpm_tolerance": 5, "key_compatible": True,
+                    "bpm_tolerance": 5,
+                    "key_compatible": True,
                 },
             },
         )
         assert r.status_code == 200, r.text
-
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +586,9 @@ def client_with_api_key(tmp_path: Path, make_db):
     _populate(db, "fast.flac", bpm=130)
 
     settings = Settings(
-        libraries=[tmp_path], data_dir=tmp_path, api_key="s3cret",
+        libraries=[tmp_path],
+        data_dir=tmp_path,
+        api_key="s3cret",
     )
     app = FastAPI()
     app.include_router(public_router)
@@ -588,13 +609,15 @@ class TestApiKeyAuth:
 
     def test_wrong_key_rejected(self, client_with_api_key):
         r = client_with_api_key.get(
-            "/api/v1/status", headers={"X-API-Key": "wrong"},
+            "/api/v1/status",
+            headers={"X-API-Key": "wrong"},
         )
         assert r.status_code == 401
 
     def test_correct_key_accepted(self, client_with_api_key):
         r = client_with_api_key.get(
-            "/api/v1/status", headers={"X-API-Key": "s3cret"},
+            "/api/v1/status",
+            headers={"X-API-Key": "s3cret"},
         )
         assert r.status_code == 200, r.text
 
@@ -603,7 +626,6 @@ class TestApiKeyAuth:
         authentication."""
         c, _ = client
         assert c.get("/api/v1/status").status_code == 200
-
 
 
 # ---------------------------------------------------------------------------
@@ -640,10 +662,7 @@ class TestRequestLogging:
         with caplog.at_level("INFO", logger="harmonie.api.requests"):
             r = logged_app.get("/probe?x=1")
         assert r.status_code == 200
-        records = [
-            rec for rec in caplog.records
-            if rec.name == "harmonie.api.requests"
-        ]
+        records = [rec for rec in caplog.records if rec.name == "harmonie.api.requests"]
         assert len(records) == 1
         msg = records[0].getMessage()
         assert "GET" in msg
@@ -655,10 +674,7 @@ class TestRequestLogging:
         """``/health`` requests are logged at DEBUG, not INFO."""
         with caplog.at_level("DEBUG", logger="harmonie.api.requests"):
             logged_app.get("/health")
-        records = [
-            rec for rec in caplog.records
-            if rec.name == "harmonie.api.requests"
-        ]
+        records = [rec for rec in caplog.records if rec.name == "harmonie.api.requests"]
         assert len(records) == 1
         assert records[0].levelname == "DEBUG"
 
@@ -666,9 +682,6 @@ class TestRequestLogging:
         """A handler raising still produces a log line with status=500."""
         with caplog.at_level("INFO", logger="harmonie.api.requests"):
             logged_app.get("/boom")
-        records = [
-            rec for rec in caplog.records
-            if rec.name == "harmonie.api.requests"
-        ]
+        records = [rec for rec in caplog.records if rec.name == "harmonie.api.requests"]
         assert len(records) == 1
         assert "500" in records[0].getMessage()

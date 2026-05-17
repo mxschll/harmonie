@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from harmonie.tags import (
     Tags,
     _coerce_string,
@@ -14,7 +12,6 @@ from harmonie.tags import (
     _parse_track_number,
     extract_tags,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pure helpers

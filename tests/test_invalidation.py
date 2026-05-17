@@ -27,17 +27,16 @@ def test_similar_sees_new_tracks_after_invalidate(make_db, fake_descriptors):
     db, index = make_db()
     seed_emb = np.array([1.0, 0, 0, 0], dtype=np.float32)
     seed = _add(db, "/seed", seed_emb, fake_descriptors)
-    other = _add(db, "/other",
-                 np.array([0.9, 0.1, 0, 0], dtype=np.float32),
-                 fake_descriptors)
+    _add(db, "/other", np.array([0.9, 0.1, 0, 0], dtype=np.float32), fake_descriptors)
 
     # First query — only /other is a candidate.
     matches = find_similar_to_id(db, index, seed, n=10)
     assert {m.path for m in matches} == {"/other"}
 
     # Add a new track that should be more similar to the seed.
-    very_similar = _add(
-        db, "/very-similar",
+    _add(
+        db,
+        "/very-similar",
         np.array([0.99, 0.01, 0, 0], dtype=np.float32),
         fake_descriptors,
     )

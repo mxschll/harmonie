@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from contextlib import asynccontextmanager
-from typing import Optional
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,18 +43,19 @@ async def _log_requests(request: Request, call_next):
         path = request.url.path
         if request.url.query:
             path = f"{path}?{request.url.query}"
-        level = (
-            logging.DEBUG
-            if request.url.path in _QUIET_PATHS
-            else logging.INFO
-        )
+        level = logging.DEBUG if request.url.path in _QUIET_PATHS else logging.INFO
         access_logger.log(
-            level, "%s %s %s -> %d (%.1fms)",
-            client, request.method, path, status, duration_ms,
+            level,
+            "%s %s %s -> %d (%.1fms)",
+            client,
+            request.method,
+            path,
+            status,
+            duration_ms,
         )
 
 
-def create_app(settings: Optional[Settings] = None) -> FastAPI:
+def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
 
     @asynccontextmanager
@@ -66,7 +66,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         app.state.analyzer = analyzer
         app.state.settings = settings
 
-        scheduler_task: Optional[asyncio.Task] = None
+        scheduler_task: asyncio.Task | None = None
         if settings.libraries:
             scheduler_task = asyncio.create_task(
                 scheduler_loop(analyzer, settings),
@@ -82,10 +82,8 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         finally:
             if scheduler_task is not None:
                 scheduler_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError, Exception):
                     await scheduler_task
-                except (asyncio.CancelledError, Exception):
-                    pass
             analyzer.stop()
 
     app = FastAPI(

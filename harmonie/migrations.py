@@ -24,6 +24,7 @@ changes are new migrations.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 from typing import Callable
@@ -144,9 +145,7 @@ def get_schema_version(conn: sqlite3.Connection) -> int:
     )
     if cur.fetchone() is None:
         return 0
-    row = conn.execute(
-        "SELECT value FROM meta WHERE key='schema_version'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     return int(row[0]) if row else 0
 
 
@@ -184,7 +183,8 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     pending = list(range(current, CURRENT_SCHEMA_VERSION))
     logger.info(
         "applying %d migration(s): %s",
-        len(pending), ", ".join(str(i + 1) for i in pending),
+        len(pending),
+        ", ".join(str(i + 1) for i in pending),
     )
 
     # Python's sqlite3 driver, in its default isolation mode, implicitly
@@ -212,14 +212,14 @@ def run_migrations(conn: sqlite3.Connection) -> None:
                 )
                 conn.execute("COMMIT")
             except Exception:
-                try:
+                with contextlib.suppress(sqlite3.OperationalError):
+                    # No active transaction.
                     conn.execute("ROLLBACK")
-                except sqlite3.OperationalError:
-                    # No active transaction (unlikely, but harmless).
-                    pass
                 logger.exception(
                     "migration %d (%s) failed; rolled back to version %d",
-                    version, fn.__name__, version - 1,
+                    version,
+                    fn.__name__,
+                    version - 1,
                 )
                 raise
     finally:

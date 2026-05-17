@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
 
 AUDIO_EXTENSIONS = frozenset(
     {
-        ".flac", ".mp3", ".wav", ".ogg", ".oga", ".m4a", ".aac",
-        ".aiff", ".aif", ".wma", ".opus", ".alac",
+        ".flac",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".oga",
+        ".m4a",
+        ".aac",
+        ".aiff",
+        ".aif",
+        ".wma",
+        ".opus",
+        ".alac",
     }
 )
 
@@ -48,7 +58,7 @@ def iter_audio_files(roots: Iterable[Path]) -> Iterator[Path]:
 
 def split_library_path(
     path: str, libraries: Iterable[Path]
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Find which configured library root contains ``path``.
 
     Returns ``(library_root, relative_path)`` as resolved absolute strings,
@@ -72,4 +82,3 @@ def split_library_path(
             continue
         return str(root_resolved), str(rel)
     return None, None
-

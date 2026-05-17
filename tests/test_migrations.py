@@ -17,7 +17,6 @@ from harmonie.migrations import (
     run_migrations,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fresh / idempotent paths
 # ---------------------------------------------------------------------------
@@ -32,9 +31,8 @@ def test_fresh_db_applies_all_migrations(tmp_path: Path):
         assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
         # The tracks table now exists.
         names = {
-            r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         assert "tracks" in names
         assert "meta" in names
@@ -130,9 +128,8 @@ def test_failed_migration_rolls_back(tmp_path: Path, monkeypatch):
         assert version == CURRENT_SCHEMA_VERSION + 1
 
         names = {
-            r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         assert "good_added" in names  # the prior successful migration stuck
         assert "bad_added" not in names  # the failing migration was rolled back

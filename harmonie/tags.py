@@ -7,9 +7,10 @@ mutagen returns an empty :class:`Tags` so a tag error never aborts a scan.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any
 
 logger = logging.getLogger("harmonie.tags")
 
@@ -18,10 +19,10 @@ logger = logging.getLogger("harmonie.tags")
 class Tags:
     """Subset of audio tags read by harmonie."""
 
-    artist: Optional[str] = None
-    album: Optional[str] = None
-    title: Optional[str] = None
-    track_number: Optional[int] = None
+    artist: str | None = None
+    album: str | None = None
+    title: str | None = None
+    track_number: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -32,7 +33,7 @@ class Tags:
 # ---------------------------------------------------------------------------
 
 
-def _coerce_string(v: Any) -> Optional[str]:
+def _coerce_string(v: Any) -> str | None:
     """Mutagen returns lists of str, ASF attributes, MP4FreeForm bytes, etc.
     Pull the first sensible string out."""
     if v is None:
@@ -50,7 +51,7 @@ def _coerce_string(v: Any) -> Optional[str]:
     return s or None
 
 
-def _parse_track_number(v: Any) -> Optional[int]:
+def _parse_track_number(v: Any) -> int | None:
     """``"5/12"`` -> 5, ``5`` -> 5, ``(5, 12)`` -> 5, garbage -> None."""
     if v is None:
         return None

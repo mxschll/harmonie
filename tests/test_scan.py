@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harmonie.scan import iter_audio_files, is_audio_file
+from harmonie.scan import is_audio_file, iter_audio_files
 
 
 def test_extension_detection(tmp_path: Path):

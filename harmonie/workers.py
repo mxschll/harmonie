@@ -7,7 +7,7 @@ import multiprocessing as mp
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Union
 
 import numpy as np
 
@@ -32,6 +32,7 @@ logger = logging.getLogger("harmonie.workers")
 @dataclass
 class FullJob:
     """Compute embedding + descriptors."""
+
     path: str
     size: int
     mtime: float
@@ -40,6 +41,7 @@ class FullJob:
 @dataclass
 class DescriptorJob:
     """Compute descriptors only (top-up an existing row)."""
+
     path: str
 
 
@@ -57,8 +59,8 @@ class FullResult:
     # Full 400-d Discogs activation vector and the top-K (label, prob)
     # preview. Both ``None`` if the genre head was unavailable or the
     # backend doesn't produce Effnet-compatible embeddings.
-    style_activations: Optional[np.ndarray] = None
-    top_styles: Optional[list[tuple[str, float]]] = None
+    style_activations: np.ndarray | None = None
+    top_styles: list[tuple[str, float]] | None = None
 
 
 @dataclass
@@ -124,7 +126,7 @@ def _do_full(job: FullJob) -> WorkerResult:
     logger.info("extracting: %s", job.path)
     try:
         feats: TrackFeatures = _extractor.extract(Path(job.path))
-        styles: Optional[list[tuple[str, float]]] = None
+        styles: list[tuple[str, float]] | None = None
         labels = getattr(_extractor, "genre_labels", None)
         if feats.style_activations is not None and labels:
             styles = top_styles(feats.style_activations, labels)
@@ -161,7 +163,7 @@ def _do_descriptors(job: DescriptorJob) -> WorkerResult:
         return JobError(path=job.path, error=repr(e))
 
 
-def _dispatch(job: Union[FullJob, DescriptorJob]) -> WorkerResult:
+def _dispatch(job: FullJob | DescriptorJob) -> WorkerResult:
     if isinstance(job, FullJob):
         return _do_full(job)
     return _do_descriptors(job)
@@ -177,13 +179,17 @@ class WorkerPool:
     back via ``imap_unordered``."""
 
     def __init__(
-        self, *, backend: str, workers: int, log_level: str = "INFO",
+        self,
+        *,
+        backend: str,
+        workers: int,
+        log_level: str = "INFO",
     ) -> None:
         self.backend = backend
         self.workers = max(1, workers)
         # 'spawn' avoids fork-after-thread issues with TensorFlow.
         ctx = mp.get_context("spawn")
-        self._pool: Optional[mp.pool.Pool] = ctx.Pool(
+        self._pool: mp.pool.Pool | None = ctx.Pool(
             processes=self.workers,
             initializer=_worker_init,
             initargs=(backend, log_level),
@@ -212,8 +218,12 @@ class WorkerPool:
 
 
 def build_jobs(
-    db, files: list[Path], *, model_name: str, force: bool,
-    on_progress: Optional[Callable[[int], None]] = None,
+    db,
+    files: list[Path],
+    *,
+    model_name: str,
+    force: bool,
+    on_progress: Callable[[int], None] | None = None,
 ) -> tuple[list[FullJob], list[DescriptorJob], int]:
     """Decide which files need a full analysis vs. a descriptor refresh.
 

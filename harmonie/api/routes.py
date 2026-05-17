@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from fastapi.security import APIKeyHeader
@@ -12,9 +12,9 @@ from fastapi.security import APIKeyHeader
 from .. import __version__
 from ..analyzer import Analyzer
 from ..db import Database, TrackFilter
+from ..features import DESCRIPTOR_VERSION
 from ..index import EmbeddingIndex
 from ..migrations import CURRENT_SCHEMA_VERSION
-from ..features import DESCRIPTOR_VERSION
 from ..playlist import (
     ChainedPlaylistRequest,
     SimilarPlaylistRequest,
@@ -56,7 +56,7 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 def get_analyzer(request: Request) -> Analyzer:
-    analyzer: Optional[Analyzer] = getattr(request.app.state, "analyzer", None)
+    analyzer: Analyzer | None = getattr(request.app.state, "analyzer", None)
     if analyzer is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "service initializing")
     return analyzer
@@ -71,7 +71,7 @@ def get_index(analyzer: Analyzer = Depends(get_analyzer)) -> EmbeddingIndex:
 
 
 def require_api_key(
-    request: Request, key: Annotated[Optional[str], Depends(api_key_header)]
+    request: Request, key: Annotated[str | None, Depends(api_key_header)]
 ) -> None:
     expected = request.app.state.settings.api_key
     if not expected:
@@ -90,7 +90,7 @@ def _styles_to_schema(rows: list[tuple[str, float]]) -> list[StyleScore]:
 
 
 def _row_to_summary(
-    row: dict, styles: Optional[list[tuple[str, float]]] = None
+    row: dict, styles: list[tuple[str, float]] | None = None
 ) -> TrackSummary:
     return TrackSummary(
         id=row["id"],
@@ -141,7 +141,7 @@ def _enrich_matches(db: Database, matches) -> list[MatchOut]:
 
 
 def filter_query(
-    bpm: Optional[str] = Query(
+    bpm: str | None = Query(
         None,
         description=(
             "BPM filter. ``120..130`` (closed range), ``120..`` (lower "
@@ -149,20 +149,23 @@ def filter_query(
         ),
         examples=["120..130"],
     ),
-    danceability: Optional[str] = Query(
-        None, description="Same range syntax as ``bpm``.",
+    danceability: str | None = Query(
+        None,
+        description="Same range syntax as ``bpm``.",
     ),
-    loudness: Optional[str] = Query(
+    loudness: str | None = Query(
         None,
         description="ReplayGain in dB; same range syntax. e.g. ``..-10``.",
     ),
-    key: Optional[list[str]] = Query(
-        None, description="Filter by key. Repeat the param for OR.",
+    key: list[str] | None = Query(
+        None,
+        description="Filter by key. Repeat the param for OR.",
     ),
-    scale: Optional[str] = Query(
-        None, description="``major`` or ``minor``.",
+    scale: str | None = Query(
+        None,
+        description="``major`` or ``minor``.",
     ),
-    style: Optional[list[str]] = Query(
+    style: list[str] | None = Query(
         None,
         description=(
             "Discogs-400 style filter. ``Genre---Style`` matches exactly; "
@@ -170,11 +173,14 @@ def filter_query(
         ),
     ),
     style_min: float = Query(
-        0.0, ge=0.0, le=1.0,
+        0.0,
+        ge=0.0,
+        le=1.0,
         description="Minimum classifier probability for a style row to count.",
     ),
     style_mode: str = Query(
-        "any", pattern="^(any|all)$",
+        "any",
+        pattern="^(any|all)$",
         description="``any`` (default) or ``all`` of the requested styles.",
     ),
 ) -> TrackFilter:
@@ -195,7 +201,7 @@ def filter_query(
     except ValueError as e:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, f"invalid range filter: {e}"
-        )
+        ) from e
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +256,7 @@ def list_tracks(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     order_by: str = Query("id", pattern="^(id|path|bpm|duration|analyzed_at)$"),
-    model: Optional[str] = Query(None),
+    model: str | None = Query(None),
 ) -> TrackList:
     rows, total = db.list_tracks(
         filter=f, model=model, limit=limit, offset=offset, order_by=order_by
@@ -267,16 +273,16 @@ def list_tracks(
 @api_router.get("/tracks/resolve", response_model=Track)
 def resolve_track(
     db: Database = Depends(get_db),
-    path: Optional[str] = Query(
+    path: str | None = Query(
         None,
         description=(
             "Absolute or library-relative path. Tried first; falls through "
             "to tag matching if not found."
         ),
     ),
-    artist: Optional[str] = Query(None),
-    album: Optional[str] = Query(None),
-    title: Optional[str] = Query(None),
+    artist: str | None = Query(None),
+    album: str | None = Query(None),
+    title: str | None = Query(None),
 ) -> Track:
     """Find one track by path and/or tags. Strategies, in order — first
     hit wins:
@@ -323,7 +329,9 @@ def similar_to(
             db, index, track_id, n=limit, filter=f, include_self=include_self
         )
     except KeyError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"track {track_id} not found")
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"track {track_id} not found"
+        ) from None
     return SimilarResult(
         query_id=track_id,
         matches=_enrich_matches(db, matches),
@@ -337,10 +345,10 @@ def similar_to(
 def list_styles(
     db: Database = Depends(get_db),
     style_min: float = Query(
-        0.0, ge=0.0, le=1.0,
-        description=(
-            "Only count style rows whose probability is at least this high."
-        ),
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description=("Only count style rows whose probability is at least this high."),
     ),
 ) -> StyleList:
     """Enumerate every Discogs-400 style currently present in the
@@ -428,7 +436,8 @@ def make_playlist(
     try:
         if isinstance(body, SimilarPlaylist):
             items = generate_similar_playlist(
-                db, index,
+                db,
+                index,
                 SimilarPlaylistRequest(
                     seed_ids=merged_seed_ids,
                     n=body.n,
@@ -440,7 +449,8 @@ def make_playlist(
             )
         elif isinstance(body, DriftPlaylist):
             items = generate_chained_playlist(
-                db, index,
+                db,
+                index,
                 ChainedPlaylistRequest(
                     seed_ids=merged_seed_ids,
                     chunk_size=body.chunk_size,
@@ -468,9 +478,9 @@ def make_playlist(
                 status.HTTP_400_BAD_REQUEST, f"unknown playlist mode: {body!r}"
             )
     except KeyError as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
     except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
 
     return PlaylistResult(
         items=_enrich_matches(db, items),

@@ -22,7 +22,6 @@ from harmonie.features import (
     top_styles,
 )
 
-
 # ---------------------------------------------------------------------------
 # top_styles helper
 # ---------------------------------------------------------------------------
@@ -88,8 +87,7 @@ def test_migration_creates_style_columns_and_table(tmp_db_path):
     try:
         # tracks.style_activations exists and is a BLOB.
         cols = {
-            r["name"]: r["type"]
-            for r in db._conn.execute("PRAGMA table_info(tracks)")
+            r["name"]: r["type"] for r in db._conn.execute("PRAGMA table_info(tracks)")
         }
         assert "style_activations" in cols
         assert cols["style_activations"].upper() == "BLOB"
@@ -156,7 +154,9 @@ def test_db_roundtrip_styles(tmp_db_path):
     try:
         emb = np.zeros(4, dtype=np.float32)
         tid = _upsert_with_styles(
-            db, "/a.flac", emb,
+            db,
+            "/a.flac",
+            emb,
             top_styles_rows=[
                 ("Electronic---House", 0.91),
                 ("Electronic---Techno", 0.42),
@@ -195,11 +195,15 @@ def test_db_upsert_replaces_styles(tmp_db_path):
     try:
         emb = np.zeros(4, dtype=np.float32)
         tid = _upsert_with_styles(
-            db, "/a.flac", emb,
+            db,
+            "/a.flac",
+            emb,
             top_styles_rows=[("Electronic---House", 0.9)],
         )
         _upsert_with_styles(
-            db, "/a.flac", emb,
+            db,
+            "/a.flac",
+            emb,
             top_styles_rows=[("Rock---Punk", 0.7)],
         )
         rows = db.get_track_styles(tid)
@@ -219,7 +223,9 @@ def test_db_remove_cascades_to_styles(tmp_db_path):
     db = Database(tmp_db_path)
     try:
         tid = _upsert_with_styles(
-            db, "/a.flac", np.zeros(4, dtype=np.float32),
+            db,
+            "/a.flac",
+            np.zeros(4, dtype=np.float32),
             top_styles_rows=[("Electronic---House", 0.9)],
         )
         db.remove_by_id(tid)
@@ -243,15 +249,21 @@ def test_filter_ids_by_style_exact_and_prefix(tmp_db_path):
     try:
         emb = np.zeros(4, dtype=np.float32)
         a = _upsert_with_styles(
-            db, "/a", emb,
+            db,
+            "/a",
+            emb,
             top_styles_rows=[("Electronic---House", 0.9)],
         )
         b = _upsert_with_styles(
-            db, "/b", emb,
+            db,
+            "/b",
+            emb,
             top_styles_rows=[("Electronic---Techno", 0.8)],
         )
         c = _upsert_with_styles(
-            db, "/c", emb,
+            db,
+            "/c",
+            emb,
             top_styles_rows=[("Rock---Punk", 0.7)],
         )
 
@@ -262,20 +274,17 @@ def test_filter_ids_by_style_exact_and_prefix(tmp_db_path):
         assert db.filter_ids_by_style(["Electronic"]) == {a, b}
 
         # min_probability gate excludes B (0.8) but keeps A (0.9).
-        assert db.filter_ids_by_style(
-            ["Electronic"], min_probability=0.85
-        ) == {a}
+        assert db.filter_ids_by_style(["Electronic"], min_probability=0.85) == {a}
 
         # Multiple needles, "any" mode.
-        assert db.filter_ids_by_style(
-            ["Electronic---House", "Rock---Punk"]
-        ) == {a, c}
+        assert db.filter_ids_by_style(["Electronic---House", "Rock---Punk"]) == {a, c}
 
         # "all" mode requires every needle to be present on a track.
         # A has House but not Punk → empty.
-        assert db.filter_ids_by_style(
-            ["Electronic---House", "Rock---Punk"], match="all"
-        ) == set()
+        assert (
+            db.filter_ids_by_style(["Electronic---House", "Rock---Punk"], match="all")
+            == set()
+        )
     finally:
         db.close()
 
@@ -287,15 +296,21 @@ def test_list_styles_aggregates_by_count(tmp_db_path):
     try:
         emb = np.zeros(4, dtype=np.float32)
         _upsert_with_styles(
-            db, "/a", emb,
+            db,
+            "/a",
+            emb,
             top_styles_rows=[("Electronic---House", 0.9)],
         )
         _upsert_with_styles(
-            db, "/b", emb,
+            db,
+            "/b",
+            emb,
             top_styles_rows=[("Electronic---House", 0.5), ("Rock---Punk", 0.4)],
         )
         _upsert_with_styles(
-            db, "/c", emb,
+            db,
+            "/c",
+            emb,
             top_styles_rows=[("Electronic---House", 0.7)],
         )
 
@@ -306,7 +321,8 @@ def test_list_styles_aggregates_by_count(tmp_db_path):
         assert by_style["Rock---Punk"]["track_count"] == 1
         # mean_probability aggregates probabilities, not just counts.
         assert by_style["Electronic---House"]["mean_probability"] == pytest.approx(
-            (0.9 + 0.5 + 0.7) / 3, abs=1e-6,
+            (0.9 + 0.5 + 0.7) / 3,
+            abs=1e-6,
         )
         # min_probability gate filters out the Punk row (0.4 < 0.6).
         styles_high = db.list_styles(min_probability=0.6)
@@ -327,21 +343,28 @@ def api_client_with_styles(tmp_path, make_db):
     """Mount the app on a populated DB and return a TestClient."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from harmonie.api.routes import api_router, public_router
     from harmonie.config import Settings
 
     db, index = make_db("api.db")
     emb = np.zeros(4, dtype=np.float32)
     _upsert_with_styles(
-        db, "/lib/house.flac", emb,
+        db,
+        "/lib/house.flac",
+        emb,
         top_styles_rows=[("Electronic---House", 0.9)],
     )
     _upsert_with_styles(
-        db, "/lib/techno.flac", emb,
+        db,
+        "/lib/techno.flac",
+        emb,
         top_styles_rows=[("Electronic---Techno", 0.8)],
     )
     _upsert_with_styles(
-        db, "/lib/punk.flac", emb,
+        db,
+        "/lib/punk.flac",
+        emb,
         top_styles_rows=[("Rock---Punk", 0.7)],
     )
 
@@ -387,7 +410,8 @@ def test_api_list_tracks_filters_by_style_prefix(api_client_with_styles):
 def test_api_list_tracks_filters_by_exact_style(api_client_with_styles):
     client, _db = api_client_with_styles
     r = client.get(
-        "/api/v1/tracks", params=[("style", "Electronic---Techno")],
+        "/api/v1/tracks",
+        params=[("style", "Electronic---Techno")],
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -401,7 +425,9 @@ def test_api_styles_endpoint_lists_known_styles(api_client_with_styles):
     body = r.json()
     names = sorted(s["style"] for s in body["items"])
     assert names == [
-        "Electronic---House", "Electronic---Techno", "Rock---Punk",
+        "Electronic---House",
+        "Electronic---Techno",
+        "Rock---Punk",
     ]
     assert body["total"] == 3
 
@@ -409,7 +435,8 @@ def test_api_styles_endpoint_lists_known_styles(api_client_with_styles):
 def test_api_styles_endpoint_respects_min_probability(api_client_with_styles):
     client, _db = api_client_with_styles
     r = client.get(
-        "/api/v1/styles", params={"style_min": 0.85},
+        "/api/v1/styles",
+        params={"style_min": 0.85},
     )
     assert r.status_code == 200, r.text
     names = [s["style"] for s in r.json()["items"]]

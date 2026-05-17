@@ -8,13 +8,11 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
 from .db import Database, TrackFilter
 from .index import EmbeddingIndex, l2_normalize_vec
-
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -35,34 +33,44 @@ class Match:
 # Map (key, scale) -> Camelot code. Sharp and flat spellings both
 # registered.
 _CAMELOT: dict[tuple[str, str], str] = {
-    ("Ab", "minor"): "1A",  ("G#", "minor"): "1A",
-    ("B",  "major"): "1B",
-    ("Eb", "minor"): "2A",  ("D#", "minor"): "2A",
-    ("F#", "major"): "2B",  ("Gb", "major"): "2B",
-    ("Bb", "minor"): "3A",  ("A#", "minor"): "3A",
-    ("Db", "major"): "3B",  ("C#", "major"): "3B",
-    ("F",  "minor"): "4A",
-    ("Ab", "major"): "4B",  ("G#", "major"): "4B",
-    ("C",  "minor"): "5A",
-    ("Eb", "major"): "5B",  ("D#", "major"): "5B",
-    ("G",  "minor"): "6A",
-    ("Bb", "major"): "6B",  ("A#", "major"): "6B",
-    ("D",  "minor"): "7A",
-    ("F",  "major"): "7B",
-    ("A",  "minor"): "8A",
-    ("C",  "major"): "8B",
-    ("E",  "minor"): "9A",
-    ("G",  "major"): "9B",
-    ("B",  "minor"): "10A",
-    ("D",  "major"): "10B",
-    ("F#", "minor"): "11A", ("Gb", "minor"): "11A",
-    ("A",  "major"): "11B",
-    ("C#", "minor"): "12A", ("Db", "minor"): "12A",
-    ("E",  "major"): "12B",
+    ("Ab", "minor"): "1A",
+    ("G#", "minor"): "1A",
+    ("B", "major"): "1B",
+    ("Eb", "minor"): "2A",
+    ("D#", "minor"): "2A",
+    ("F#", "major"): "2B",
+    ("Gb", "major"): "2B",
+    ("Bb", "minor"): "3A",
+    ("A#", "minor"): "3A",
+    ("Db", "major"): "3B",
+    ("C#", "major"): "3B",
+    ("F", "minor"): "4A",
+    ("Ab", "major"): "4B",
+    ("G#", "major"): "4B",
+    ("C", "minor"): "5A",
+    ("Eb", "major"): "5B",
+    ("D#", "major"): "5B",
+    ("G", "minor"): "6A",
+    ("Bb", "major"): "6B",
+    ("A#", "major"): "6B",
+    ("D", "minor"): "7A",
+    ("F", "major"): "7B",
+    ("A", "minor"): "8A",
+    ("C", "major"): "8B",
+    ("E", "minor"): "9A",
+    ("G", "major"): "9B",
+    ("B", "minor"): "10A",
+    ("D", "major"): "10B",
+    ("F#", "minor"): "11A",
+    ("Gb", "minor"): "11A",
+    ("A", "major"): "11B",
+    ("C#", "minor"): "12A",
+    ("Db", "minor"): "12A",
+    ("E", "major"): "12B",
 }
 
 
-def camelot_of(key: Optional[str], scale: Optional[str]) -> Optional[str]:
+def camelot_of(key: str | None, scale: str | None) -> str | None:
     if not key or not scale:
         return None
     return _CAMELOT.get((key, scale.lower()))
@@ -83,9 +91,7 @@ def compatible_camelot(code: str) -> set[str]:
     }
 
 
-def compatible_keys_for(
-    key: Optional[str], scale: Optional[str]
-) -> set[tuple[str, str]]:
+def compatible_keys_for(key: str | None, scale: str | None) -> set[tuple[str, str]]:
     """The (key, scale) pairs harmonically compatible with the given one."""
     code = camelot_of(key, scale)
     if code is None:
@@ -103,9 +109,9 @@ def compatible_keys_for(
 class SimilarPlaylistRequest:
     seed_ids: list[int]
     n: int = 20
-    bpm_drift: Optional[float] = None
+    bpm_drift: float | None = None
     harmonic_mix: bool = False
-    descriptor_filter: Optional[TrackFilter] = None
+    descriptor_filter: TrackFilter | None = None
     include_seeds: bool = False
 
 
@@ -144,7 +150,7 @@ def generate_similar_playlist(
     centroid = cached.matrix[seed_indices].mean(axis=0)
 
     # Allowed-ID gate: descriptor filter plus optional harmonic-mix restriction.
-    allowed_ids: Optional[set[int]] = None
+    allowed_ids: set[int] | None = None
     if req.descriptor_filter is not None and not req.descriptor_filter.is_empty():
         allowed_ids = db.filtered_ids(filter=req.descriptor_filter, model=model)
 
@@ -162,7 +168,7 @@ def generate_similar_playlist(
     seed_bpms = [r["bpm"] for r in seed_rows if r.get("bpm") is not None]
     # bpm_drift gate uses just the BPM column from the (bpm, key, scale)
     # bulk lookup. Cheaper than a second query.
-    bpm_lookup: dict[int, Optional[float]] = (
+    bpm_lookup: dict[int, float | None] = (
         {tid: meta[0] for tid, meta in db.bpm_key_by_id_for_model(model).items()}
         if req.bpm_drift is not None
         else {}
@@ -192,7 +198,7 @@ def generate_similar_playlist(
     # so bpm_drift applies between the seed and the first selected track.
     chosen: list[tuple[int, str, float, np.ndarray]] = []
     prev_emb: np.ndarray = centroid_n
-    prev_bpm: Optional[float] = seed_bpms[0] if seed_bpms else None
+    prev_bpm: float | None = seed_bpms[0] if seed_bpms else None
 
     while candidates and len(chosen) < req.n:
         best_idx = -1
@@ -201,12 +207,18 @@ def generate_similar_playlist(
             sim = float(emb @ prev_emb)
             if req.bpm_drift is not None:
                 bpm = bpm_lookup.get(tid)
-                if prev_bpm is not None and bpm is not None:
-                    if abs(bpm - prev_bpm) > req.bpm_drift:
-                        continue
-                if seed_bpms and bpm is not None:
-                    if min(abs(bpm - s) for s in seed_bpms) > req.bpm_drift * 2:
-                        continue
+                if (
+                    prev_bpm is not None
+                    and bpm is not None
+                    and abs(bpm - prev_bpm) > req.bpm_drift
+                ):
+                    continue
+                if (
+                    seed_bpms
+                    and bpm is not None
+                    and min(abs(bpm - s) for s in seed_bpms) > req.bpm_drift * 2
+                ):
+                    continue
             if sim > best_score:
                 best_score = sim
                 best_idx = i
@@ -250,9 +262,9 @@ class ChainedPlaylistRequest:
     seed_ids: list[int]
     chunk_size: int = 5
     n: int = 20
-    descriptor_filter: Optional[TrackFilter] = None
+    descriptor_filter: TrackFilter | None = None
     include_seed: bool = False
-    bpm_drift: Optional[float] = None
+    bpm_drift: float | None = None
     harmonic_mix: bool = False
 
 
@@ -289,7 +301,7 @@ def generate_chained_playlist(
             return []  # stale state; bail
         seed_indices.append(idx)
 
-    allowed_ids: Optional[set[int]] = None
+    allowed_ids: set[int] | None = None
     if req.descriptor_filter is not None and not req.descriptor_filter.is_empty():
         allowed_ids = db.filtered_ids(filter=req.descriptor_filter, model=model)
 
@@ -303,23 +315,19 @@ def generate_chained_playlist(
     if req.include_seed:
         # Emit each seed in input order, with score 1.0 (perfect self-match).
         for sid, idx in zip(req.seed_ids, seed_indices):
-            chosen.append(
-                Match(track_id=sid, path=cached.paths[idx], score=1.0)
-            )
+            chosen.append(Match(track_id=sid, path=cached.paths[idx], score=1.0))
 
     # L2-normalized centroid of the seed embeddings, used as the starting
     # anchor. Collapses to the single seed's vector when there's one seed.
     anchor_emb = cached.matrix[seed_indices].mean(axis=0)
-    anchor_emb = l2_normalize_vec(
-        anchor_emb.astype(np.float32, copy=False)
-    )
+    anchor_emb = l2_normalize_vec(anchor_emb.astype(np.float32, copy=False))
 
     # Consecutive-transition baseline starts at the first seed. Updates to
     # the most recent pick after each iteration.
     first_seed = seed_rows[0]
-    prev_bpm: Optional[float] = first_seed.get("bpm")
-    prev_key: Optional[str] = first_seed.get("key")
-    prev_scale: Optional[str] = first_seed.get("scale")
+    prev_bpm: float | None = first_seed.get("bpm")
+    prev_key: str | None = first_seed.get("key")
+    prev_scale: str | None = first_seed.get("scale")
 
     while len(chosen) < req.n:
         scores = cached.matrix @ anchor_emb  # cached rows are normalised
@@ -350,21 +358,18 @@ def generate_chained_playlist(
                 if not cand_key or not cand_scale:
                     continue
                 if chunk_prev_key and chunk_prev_scale:
-                    ok_pairs = compatible_keys_for(
-                        chunk_prev_key, chunk_prev_scale
-                    )
+                    ok_pairs = compatible_keys_for(chunk_prev_key, chunk_prev_scale)
                     if (cand_key, cand_scale) not in ok_pairs:
                         continue
 
             # bpm_drift: candidate's BPM within tolerance of previous pick.
             # Lenient — skip the check if either side has no BPM info.
-            if req.bpm_drift is not None:
-                if (
-                    chunk_prev_bpm is not None
-                    and cand_bpm is not None
-                    and abs(cand_bpm - chunk_prev_bpm) > req.bpm_drift
-                ):
-                    continue
+            if req.bpm_drift is not None and (
+                chunk_prev_bpm is not None
+                and cand_bpm is not None
+                and abs(cand_bpm - chunk_prev_bpm) > req.bpm_drift
+            ):
+                continue
 
             chunk.append(
                 Match(
@@ -413,15 +418,15 @@ def generate_chained_playlist(
 @dataclass
 class VibePlaylistRequest:
     n: int = 20
-    descriptor_filter: Optional[TrackFilter] = None
-    target_bpm: Optional[float] = None
-    target_danceability: Optional[float] = None
+    descriptor_filter: TrackFilter | None = None
+    target_bpm: float | None = None
+    target_danceability: float | None = None
     shuffle: bool = True
-    seed: Optional[int] = None
+    seed: int | None = None
 
 
 def generate_vibe_playlist(
-    db: Database, req: VibePlaylistRequest, *, model: Optional[str] = None
+    db: Database, req: VibePlaylistRequest, *, model: str | None = None
 ) -> list[Match]:
     rows, _total = db.list_tracks(
         filter=req.descriptor_filter, model=model, limit=10_000, offset=0
