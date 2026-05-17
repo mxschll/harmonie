@@ -54,7 +54,10 @@ include = ["harmonie*"]
 version_file = "harmonie/_version.py"
 # When installed outside a git checkout (e.g. from an sdist that didn't
 # include git history), fall back to this rather than failing the build.
-fallback_version = "0.0.0+unknown"
+# Note: do NOT include a local-version part (the bit after ``+``) here —
+# setuptools-scm v9 splices the fallback's local part into the computed
+# version's local part, producing strings like ``...+unknown.gHASH``.
+fallback_version = "0.0.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
