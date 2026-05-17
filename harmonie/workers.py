@@ -89,12 +89,30 @@ _extractor = None
 _backend_name = ""
 
 
-def _worker_init(backend: str) -> None:
-    """Run once per worker process. Loads the model into a process global."""
+def _worker_init(backend: str, log_level: str = "INFO") -> None:
+    """Run once per worker process. Loads the model into a process global.
+
+    Also silences Essentia's noisy ``[WARNING] No network created, or last
+    created network has been deleted`` line that fires every time the
+    standard-mode TF wrapper destroys its internal streaming network.
+    The warning is harmless but printed once per track. Real extraction
+    failures still surface as :class:`JobError` results from
+    :func:`_do_full` / :func:`_do_descriptors`, so we don't lose signal.
+    DEBUG-level deployments keep Essentia's warnings on for diagnostics.
+    """
     global _extractor, _backend_name
     # Quiet TF in workers.
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
     _backend_name = backend
+
+    if log_level.upper() != "DEBUG":
+        try:
+            import essentia  # type: ignore[import-not-found]
+
+            essentia.log.warningActive = False
+        except Exception:  # pragma: no cover - essentia not installed
+            pass
+
     _extractor = get_extractor(backend)
 
 
@@ -156,7 +174,9 @@ class WorkerPool:
     ``imap_unordered`` so the orchestrator can write to the DB as work
     completes rather than waiting for the whole batch."""
 
-    def __init__(self, *, backend: str, workers: int) -> None:
+    def __init__(
+        self, *, backend: str, workers: int, log_level: str = "INFO",
+    ) -> None:
         self.backend = backend
         self.workers = max(1, workers)
         # 'spawn' avoids fork-after-thread issues with TensorFlow.
@@ -164,7 +184,7 @@ class WorkerPool:
         self._pool: Optional[mp.pool.Pool] = ctx.Pool(
             processes=self.workers,
             initializer=_worker_init,
-            initargs=(backend,),
+            initargs=(backend, log_level),
         )
         logger.info(
             "started worker pool: %d workers, backend=%s", self.workers, backend

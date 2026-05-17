@@ -45,6 +45,11 @@ pipx upgrade harmonie
 
 On first start, harmonie scans your library. Effnet inference is about a second per track on a fast core, longer on slow CPUs or network mounts. Large libraries on slow disks can take a day.
 
+Reference points:
+
+* 50,000 tracks on a 12-vCPU Hetzner VPS (AMD EPYC-Genoa @ 2.4 GHz, `HARMONIE_WORKERS=12`): _TBD_.
+* 2-vCPU Hetzner VPS (Intel Xeon @ 2.1 GHz): roughly 14 seconds per track. 5,000 tracks took 19 hours; a 50,000-track library at this rate would take about eight days.
+
 Watch progress:
 
 ```bash

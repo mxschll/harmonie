@@ -105,6 +105,7 @@ class Analyzer:
             self.pool = WorkerPool(
                 backend=self.settings.backend,
                 workers=self.settings.worker_count,
+                log_level=self.settings.log_level,
             )
 
     def stop(self) -> None:
