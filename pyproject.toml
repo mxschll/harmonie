@@ -11,7 +11,7 @@ name = "harmonie"
 dynamic = ["version"]
 description = "Audio similarity service. Scans music libraries, extracts Essentia embeddings + descriptors, exposes an HTTP API for similarity queries and playlist generation."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.13"
 dependencies = [
     "numpy>=1.23",
     "essentia-tensorflow",
