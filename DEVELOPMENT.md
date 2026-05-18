@@ -13,6 +13,7 @@ Architecture, scaling notes, and contribution workflow for harmonie. See [README
 - [Scan history](#scan-history)
 - [Cancellation](#cancellation)
 - [Schema migrations](#schema-migrations)
+- [Releases](#releases)
 
 ## Local setup
 
@@ -156,3 +157,32 @@ To add a migration:
 3. Update any code in `db.py` that depends on the new shape (column lists in `upsert_track`, `list_tracks`, `get_tracks_by_ids`, etc.).
 
 Existing migration files don't change after they've shipped; new changes are new migrations. Migration `upgrade` functions must use `conn.execute(...)` for each statement individually rather than `conn.executescript(...)`. The latter issues its own commit and breaks the surrounding transaction.
+
+
+## Releases
+
+Versions come from git tags via setuptools-scm. A push to `main` automatically creates a new patch tag (`v1.0.1`, `v1.0.2`, ...) and a corresponding GitHub release with auto-generated notes. The workflow lives in `.github/workflows/release.yml`.
+
+The auto-bump only ever steps the patch component. For minor or major bumps, tag the desired commit yourself before pushing:
+
+```bash
+# After merging a feature:
+git tag v1.1.0
+git push origin v1.1.0
+
+# After a breaking change:
+git tag v2.0.0
+git push origin v2.0.0
+```
+
+The next push to `main` after that resumes patch-bumping from your tag (`v1.1.0` → `v1.1.1`, etc.).
+
+To skip versioning for a single commit (typo fixes, CI tweaks, doc-only changes), include `[skip release]` in the commit message:
+
+```bash
+git commit -m "docs: fix typo [skip release]"
+```
+
+`[skip ci]` works as a synonym.
+
+`pipx upgrade harmonie` always picks up the highest version tag, so users see the new release the moment the tag is pushed.

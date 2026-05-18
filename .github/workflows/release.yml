@@ -1,0 +1,72 @@
+name: release
+
+# Auto-tag every push to main with the next patch version. Major and
+# minor bumps are still manual: tag v1.1.0 (or v2.0.0) yourself and the
+# workflow will resume patch-bumping from there. Add ``[skip release]``
+# to a commit message to suppress tagging for that commit (typo fixes,
+# CI tweaks, etc.).
+
+on:
+  push:
+    branches: [main]
+
+# Serialise so two pushes in quick succession don't both compute the
+# same next version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: tag and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so git tag --list sees every prior version.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check skip marker
+        id: should_skip
+        run: |
+          msg=$(git log -1 --pretty=%B)
+          if echo "$msg" | grep -qE '\[skip release\]|\[skip ci\]'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping release per commit message marker."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next patch version
+        if: steps.should_skip.outputs.skip == 'false'
+        id: bump
+        run: |
+          set -euo pipefail
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          latest=${latest:-v0.0.0}
+          IFS='.' read -r major minor patch <<< "${latest#v}"
+          patch=$((patch + 1))
+          new="v${major}.${minor}.${patch}"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          echo "Bumping ${latest} -> ${new}"
+
+      - name: Push tag
+        if: steps.should_skip.outputs.skip == 'false'
+        env:
+          NEW_TAG: ${{ steps.bump.outputs.new }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+
+      - name: Create GitHub release
+        if: steps.should_skip.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.new }}
+          name: ${{ steps.bump.outputs.new }}
+          generate_release_notes: true
