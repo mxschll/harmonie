@@ -2,15 +2,18 @@ name: release
 
 # Auto-tag every push to main with the next version.
 #
-# Default bump is the patch component. Override with a marker in the
-# commit message:
+# Default bump is the patch component. Override with a marker on the
+# *subject line* of the commit message (the first line):
 #
 #   [bump minor]   -> 1.0.5 → 1.1.0
 #   [bump major]   -> 1.1.0 → 2.0.0
 #   [skip release] -> no tag created (alias: [skip ci])
 #
-# Markers can appear anywhere in the commit message (subject or body).
-# For PR merges, put the marker in the squash/merge commit message.
+# Subject-only matching is deliberate: it stops markers in code fences,
+# in the body of a meta-commit (e.g. one that documents the markers),
+# or quoted in a PR description from accidentally bumping the version.
+# For PR merges, put the marker in the squash/merge commit's subject —
+# the simplest is to include it in the PR title.
 
 on:
   push:
@@ -38,14 +41,17 @@ jobs:
       - name: Decide bump
         id: decide
         run: |
-          msg=$(git log -1 --pretty=%B)
-          if echo "$msg" | grep -qE '\[skip release\]|\[skip ci\]'; then
+          # %s is the subject line only. Markers anywhere in the body
+          # are intentionally ignored to keep meta-commits safe.
+          subject=$(git log -1 --pretty=%s)
+          echo "subject: $subject"
+          if echo "$subject" | grep -qE '\[skip release\]|\[skip ci\]'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Skipping release per commit message marker."
-          elif echo "$msg" | grep -qE '\[bump major\]'; then
+            echo "Skipping release per subject marker."
+          elif echo "$subject" | grep -qE '\[bump major\]'; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "level=major" >> "$GITHUB_OUTPUT"
-          elif echo "$msg" | grep -qE '\[bump minor\]'; then
+          elif echo "$subject" | grep -qE '\[bump minor\]'; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
             echo "level=minor" >> "$GITHUB_OUTPUT"
           else

@@ -163,16 +163,16 @@ Existing migration files don't change after they've shipped; new changes are new
 
 Versions come from git tags via setuptools-scm. A push to `main` automatically creates a new tag and a corresponding GitHub release with auto-generated notes. The workflow lives in `.github/workflows/release.yml`.
 
-By default the patch component bumps. Override with a marker anywhere in the commit message:
+By default the patch component bumps. Override with a marker on the **subject line** of the commit message (the first line — markers in the body are ignored):
 
-| Marker | Effect | Example |
+| Marker (on subject line) | Effect | Example |
 |---|---|---|
 | _(none)_ | patch bump | `v1.0.5` → `v1.0.6` |
 | `[bump minor]` | minor bump, patch resets to 0 | `v1.0.6` → `v1.1.0` |
 | `[bump major]` | major bump, minor and patch reset to 0 | `v1.1.0` → `v2.0.0` |
 | `[skip release]` (or `[skip ci]`) | no tag created | for typo fixes / CI tweaks |
 
-The marker can sit in the subject or body. For PR merges via the GitHub UI, put the marker in the squash/merge commit message.
+Subject-only matching is deliberate: it stops markers in code fences, in the body of a meta-commit, or quoted from a PR description from accidentally bumping the version. For PR merges via the GitHub UI, put the marker in the **squash/merge commit subject** — the simplest is to include it in the PR title.
 
 ```bash
 # Patch (the common case): nothing special.
