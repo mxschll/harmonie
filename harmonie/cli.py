@@ -49,7 +49,6 @@ def _open_resources():
     """Open the DB plus a fresh EmbeddingIndex. Returned together because
     every read-side command in this CLI needs both."""
     settings = get_settings()
-    configure_logging(settings)
     from .db import Database
     from .index import EmbeddingIndex
 
@@ -66,7 +65,6 @@ def _open_resources():
 def cmd_migrate(args: argparse.Namespace) -> int:
     """Apply pending schema migrations and exit."""
     settings = get_settings()
-    configure_logging(settings)
     import sqlite3
 
     from .db import Database
@@ -115,7 +113,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     settings = get_settings()
-    configure_logging(settings)
     # uvicorn wants an import string when reload=True; we don't reload in
     # production, so pass the app directly.
     from .api.app import create_app
@@ -159,7 +156,6 @@ def _install_cancel_handler(analyzer) -> None:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     settings = get_settings()
-    configure_logging(settings)
     from .analyzer import Analyzer
 
     analyzer = Analyzer(settings)
@@ -190,7 +186,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 def cmd_info(args: argparse.Namespace) -> int:
     settings = get_settings()
-    configure_logging(settings)
     from .db import Database
 
     db = Database(settings.db_path)
@@ -281,7 +276,6 @@ def cmd_similar(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     settings = get_settings()
-    configure_logging(settings)
     from .api.filters import build_track_filter
     from .db import Database
 
@@ -329,7 +323,6 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     settings = get_settings()
-    configure_logging(settings)
     from .db import Database
 
     db = Database(settings.db_path)
@@ -371,7 +364,6 @@ def _fmt_duration_sec(seconds: float | None) -> str:
 def cmd_scans(args: argparse.Namespace) -> int:
     """List recent scans, or show a single scan with its failures."""
     settings = get_settings()
-    configure_logging(settings)
     from .db import Database
 
     db = Database(settings.db_path)
@@ -542,6 +534,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Configure logging once here, so every subcommand inherits the same
+    # setup. Subcommands no longer need to call configure_logging themselves.
+    configure_logging(get_settings())
     return args.func(args)
 
 

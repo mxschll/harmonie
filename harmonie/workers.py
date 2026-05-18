@@ -100,12 +100,17 @@ def _worker_init(log_level: str = "INFO") -> None:
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
     # Spawn-mode workers don't inherit Python state from the parent, so
-    # logging has to be configured here. Format matches the main
-    # process's :func:`harmonie.config.configure_logging`.
+    # logging has to be configured here. Format constants are shared
+    # with :func:`harmonie.config.configure_logging`. ``force=True``
+    # replaces any handler an imported library may have attached so our
+    # format wins.
+    from .config import LOG_DATEFMT, LOG_FORMAT
+
     logging.basicConfig(
         level=log_level.upper(),
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
+        format=LOG_FORMAT,
+        datefmt=LOG_DATEFMT,
+        force=True,
     )
 
     if log_level.upper() != "DEBUG":

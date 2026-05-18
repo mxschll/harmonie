@@ -133,6 +133,12 @@ def get_settings() -> Settings:
 # Logging
 # ---------------------------------------------------------------------------
 
+# Shared format and date format. Workers (which run in spawned subprocesses
+# without inherited handlers) configure their own logging via basicConfig
+# but reuse these constants so the parent and worker output are identical.
+LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S"
+
 
 def configure_logging(settings: Settings) -> None:
     """Set up root logging. Called once at process start."""
@@ -140,10 +146,7 @@ def configure_logging(settings: Settings) -> None:
         "version": 1,
         "disable_existing_loggers": False,
         "formatters": {
-            "plain": {
-                "format": "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-                "datefmt": "%Y-%m-%dT%H:%M:%S",
-            },
+            "plain": {"format": LOG_FORMAT, "datefmt": LOG_DATEFMT},
         },
         "handlers": {
             "default": {
@@ -154,7 +157,10 @@ def configure_logging(settings: Settings) -> None:
         },
         "root": {"level": settings.log_level, "handlers": ["default"]},
         "loggers": {
+            # tensorflow's Python logger is chatty; the C++ logger is muted
+            # separately via the TF_CPP_MIN_LOG_LEVEL env var in workers.
             "tensorflow": {"level": "ERROR", "propagate": True},
+            # uvicorn's built-in access log duplicates harmonie.api.requests.
             "uvicorn.access": {"level": "WARNING", "propagate": True},
         },
     }

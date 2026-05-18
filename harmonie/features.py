@@ -141,7 +141,7 @@ def _model_cache_dir() -> Path:
 
 def _download(url: str, dest: Path) -> None:
     tmp = dest.with_suffix(dest.suffix + ".part")
-    logger.info("Downloading %s", url)
+    logger.info("downloading: %s", url)
     try:
         with urllib.request.urlopen(url) as resp:
             total = int(resp.headers.get("Content-Length", 0)) or None
