@@ -212,15 +212,19 @@ class _PlaylistCommon(BaseModel):
         None,
         description="Hard constraints on the candidate pool.",
     )
-    max_per_artist: int | None = Field(
+    artist_cooldown: int | None = Field(
         2,
-        ge=1,
+        ge=0,
         description=(
-            "Cap on tracks from any single artist. The cap relaxes "
-            "automatically when the candidate pool can't satisfy it (better "
-            "to ship a longer playlist with some repetition than a short "
-            "one). Set to ``null`` to disable. Tracks with no artist tag "
-            "are always admitted."
+            "Minimum number of picks between repeats by the same artist. "
+            "Default ``2`` means at least 2 different-artist tracks "
+            "between any two same-artist tracks (so an artist can appear "
+            "many times in a long playlist, but not back-to-back or "
+            "near-back-to-back). Set to ``0`` or ``null`` to disable the "
+            "cooldown. The cooldown relaxes automatically when no other "
+            "candidates remain — better to ship a longer playlist with "
+            "some clustering than truncate at a short length. Tracks "
+            "with no artist tag are always admitted."
         ),
     )
     dedupe_titles: bool = Field(
@@ -228,8 +232,9 @@ class _PlaylistCommon(BaseModel):
         description=(
             "Skip tracks whose ``(artist, title)`` tag pair already "
             "appeared earlier in the playlist. Lets the same song on "
-            "multiple albums or compilations show up only once. Comparison "
-            "is case-insensitive and whitespace-trimmed."
+            "multiple albums or compilations show up only once. "
+            "Comparison is case-insensitive and whitespace-trimmed. "
+            "Unlike the cooldown, the dedup never relaxes."
         ),
     )
 

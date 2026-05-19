@@ -502,30 +502,37 @@ class TestDiversityState:
 
         return _DiversityState(_DiversityPolicy(**policy))
 
-    def test_default_caps_at_two_per_artist(self):
+    def test_default_cooldown_blocks_recent_artist(self):
+        # Default cooldown=2 means the same artist can't appear within
+        # the last 2 picks — but is fine after 2 different-artist picks.
         s = self._state()
-        assert s.admit("Aphex Twin", "Xtal") == "ok"
         s.record("Aphex Twin", "Xtal")
+        s.record("Boards of Canada", "Roygbiv")
+        # Aphex Twin still in the last-2 window.
+        assert s.admit("Aphex Twin", "Tha") == "cooldown"
+        s.record("Burial", "Archangel")
+        # Now Aphex Twin is 3 picks back; outside the window.
         assert s.admit("Aphex Twin", "Tha") == "ok"
-        s.record("Aphex Twin", "Tha")
-        assert s.admit("Aphex Twin", "Heliosphan") == "over-cap"
 
     def test_default_dedupes_same_artist_title(self):
         s = self._state()
         s.record("Aphex Twin", "Xtal")
-        # Same song, different file — caught even though artist still has slack.
+        # Same song, different file — caught even after the cooldown
+        # would otherwise have expired. Dedup is permanent.
+        for _ in range(10):
+            s.record("Other", "filler")
         assert s.admit("Aphex Twin", "Xtal") == "duplicate"
 
     def test_normalisation_is_case_insensitive_and_trimmed(self):
         s = self._state()
         s.record("Aphex Twin", "Xtal")
-        # Same song with different casing/spacing.
         assert s.admit("aphex twin", "  XTAL  ") == "duplicate"
 
     def test_null_artist_is_always_admissible(self):
-        s = self._state(max_per_artist=1)
+        s = self._state(artist_cooldown=1)
         s.record(None, "Untitled A")
-        # Cap can't apply without an artist key — admit and don't increment.
+        # Cooldown can't apply without an artist key — admit freely
+        # regardless of how many tag-less tracks were just picked.
         assert s.admit(None, "Untitled B") == "ok"
 
     def test_disabled_policy_admits_everything(self):
@@ -537,15 +544,31 @@ class TestDiversityState:
         assert s.admit("Aphex Twin", "Xtal") == "ok"
 
     def test_dedupe_disabled_lets_repeats_through(self):
-        s = self._state(dedupe_titles=False, max_per_artist=10)
+        s = self._state(dedupe_titles=False, artist_cooldown=0)
         s.record("Aphex Twin", "Xtal")
         assert s.admit("Aphex Twin", "Xtal") == "ok"
 
-    def test_cap_disabled_lets_artist_dominate(self):
-        s = self._state(max_per_artist=None)
-        for _ in range(3):
-            s.record("Aphex Twin", f"track-{_}")
+    def test_cooldown_disabled_lets_artist_repeat_back_to_back(self):
+        s = self._state(artist_cooldown=None)
+        for i in range(3):
+            s.record("Aphex Twin", f"track-{i}")
         assert s.admit("Aphex Twin", "track-4") == "ok"
+
+    def test_cooldown_zero_lets_artist_repeat_back_to_back(self):
+        # Both 0 and None disable the cooldown (zero-length window).
+        s = self._state(artist_cooldown=0)
+        s.record("Aphex Twin", "Xtal")
+        assert s.admit("Aphex Twin", "Tha") == "ok"
+
+    def test_cooldown_window_is_a_sliding_tail(self):
+        # Cooldown=3 means the artist must have appeared >3 picks ago.
+        s = self._state(artist_cooldown=3)
+        s.record("Aphex Twin", "Xtal")
+        for filler_artist in ["B", "C", "D"]:
+            assert s.admit("Aphex Twin", "later") == "cooldown"
+            s.record(filler_artist, f"f-{filler_artist}")
+        # 3 different-artist picks in between; Aphex Twin now eligible.
+        assert s.admit("Aphex Twin", "later") == "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +578,8 @@ class TestDiversityState:
 
 def _seed_diverse_library(make_db, fake_descriptors):
     """Build a library with 1 seed + 4 artists × 3 tracks = 12 candidates.
-    Enough variety that an n=6 playlist with cap=2 can be fully diverse
-    without triggering the relaxation pass."""
+    Enough variety to exercise the cooldown without immediately hitting
+    the relaxation fallback."""
     db, index = make_db()
     rng = np.random.default_rng(0)
     seed_emb = rng.standard_normal(8).astype(np.float32)
@@ -580,23 +603,34 @@ def _seed_diverse_library(make_db, fake_descriptors):
     return db, index, seed
 
 
+def _check_no_back_to_back_within_window(artists: list[str], window: int) -> None:
+    """Assert that within any sliding window of `window+1` picks, no
+    artist appears more than once. This is the cooldown invariant."""
+    for i, a in enumerate(artists):
+        recent = artists[max(0, i - window) : i]
+        assert a not in recent, (
+            f"artist {a!r} repeats within cooldown={window} at index {i}; "
+            f"sequence so far: {artists[: i + 1]}"
+        )
+
+
 class TestSimilarPlaylistDiversity:
-    def test_artist_cap_respected_when_pool_has_variety(
+    def test_no_back_to_back_artist_when_pool_has_variety(
         self, make_db, fake_descriptors
     ):
         db, index, seed = _seed_diverse_library(make_db, fake_descriptors)
         items = generate_similar_playlist(
             db, index, SimilarPlaylistRequest(seed_ids=[seed], n=6)
         )
-        # 6 picks across 4 artists with cap=2: every artist appears ≤ 2.
+        # 6 picks across 4 artists with cooldown=2: no artist appears
+        # within 2 picks of itself.
         assert len(items) == 6
         artists = [db.get_track_by_id(m.track_id)["artist"] for m in items]
-        for a in set(artists):
-            assert artists.count(a) <= 2
+        _check_no_back_to_back_within_window(artists, window=2)
 
-    def test_cap_relaxes_when_pool_lacks_variety(self, make_db, fake_descriptors):
-        """Library where only one artist has enough tracks — cap relaxes
-        instead of returning a short playlist."""
+    def test_cooldown_relaxes_when_pool_lacks_variety(self, make_db, fake_descriptors):
+        """Library where only one artist has enough tracks — cooldown
+        relaxes instead of returning a short playlist."""
         from harmonie.playlist import _DiversityPolicy
 
         db, index = make_db()
@@ -621,10 +655,10 @@ class TestSimilarPlaylistDiversity:
             db,
             index,
             SimilarPlaylistRequest(
-                seed_ids=[seed], n=5, diversity=_DiversityPolicy(max_per_artist=2)
+                seed_ids=[seed], n=5, diversity=_DiversityPolicy(artist_cooldown=2)
             ),
         )
-        # Cap relaxed — we got the full 5 even though they're all OneArtist.
+        # Cooldown relaxed — we got the full 5 even though they're all OneArtist.
         assert len(items) == 5
 
     def test_dedupes_same_song_across_albums(self, make_db, fake_descriptors):
@@ -757,7 +791,7 @@ class TestSeedDedup:
 
 
 class TestChainedPlaylistDiversity:
-    def test_artist_cap_respected_across_chunks(self, make_db, fake_descriptors):
+    def test_no_back_to_back_artist_across_chunks(self, make_db, fake_descriptors):
         from harmonie.playlist import ChainedPlaylistRequest, generate_chained_playlist
 
         db, index, seed = _seed_diverse_library(make_db, fake_descriptors)
@@ -767,8 +801,7 @@ class TestChainedPlaylistDiversity:
             ChainedPlaylistRequest(seed_ids=[seed], chunk_size=3, n=6),
         )
         artists = [db.get_track_by_id(m.track_id)["artist"] for m in items]
-        for a in set(artists):
-            assert artists.count(a) <= 2
+        _check_no_back_to_back_within_window(artists, window=2)
 
     def test_dedupes_same_song(self, make_db, fake_descriptors):
         from harmonie.playlist import ChainedPlaylistRequest, generate_chained_playlist
@@ -811,10 +844,10 @@ class TestChainedPlaylistDiversity:
 
 
 class TestVibePlaylistDiversity:
-    def test_artist_cap_respected(self, make_db, fake_descriptors):
+    def test_no_back_to_back_artist(self, make_db, fake_descriptors):
         db, index = make_db()
         rng = np.random.default_rng(4)
-        # Four artists × 3 tracks each — enough variety for cap=2 on n=6.
+        # Four artists × 3 tracks each — enough variety for cooldown=2 on n=6.
         for artist in ["A", "B", "C", "D"]:
             for i in range(3):
                 _add(
@@ -829,8 +862,7 @@ class TestVibePlaylistDiversity:
             db, VibePlaylistRequest(n=6, shuffle=False), model="m1"
         )
         artists = [db.get_track_by_id(m.track_id)["artist"] for m in items]
-        for a in set(artists):
-            assert artists.count(a) <= 2
+        _check_no_back_to_back_within_window(artists, window=2)
 
     def test_dedupes_titles(self, make_db, fake_descriptors):
         db, index = make_db()
