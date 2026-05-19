@@ -7,6 +7,7 @@ artist/title tags that drive the diversity rules.
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 from typing import Literal
@@ -109,20 +110,30 @@ def compatible_keys_for(key: str | None, scale: str | None) -> set[tuple[str, st
 # Verdicts returned by :meth:`_DiversityState.admit`. Strings rather than
 # an Enum so they're easy to grep, easy to read in stack traces, and
 # trivially serialisable if we ever want to expose them.
-_AdmitVerdict = Literal["ok", "duplicate", "cooldown"]
+_AdmitVerdict = Literal["ok", "duplicate"]
+
+# Soft-cooldown tunables. Penalty decays linearly from
+# ``_COOLDOWN_STRENGTH`` at gap=0 down to 0 at gap=``_COOLDOWN_WIDTH``.
+# Picked as defaults that work well on typical Discogs-Effnet libraries
+# where cosine similarities cluster in 0.85–0.95: a 0.2 penalty is
+# enough to swing the order between candidates 0.05–0.20 apart in
+# similarity but doesn't overwhelm a clearly more-similar pick. Tweak
+# both numbers in tandem if the playlists feel too tight or too loose.
+_COOLDOWN_WIDTH = 3
+_COOLDOWN_STRENGTH = 0.2
 
 
 @dataclass(frozen=True)
 class _DiversityPolicy:
     """How aggressively a playlist mixes artists and dedupes duplicates.
 
-    ``artist_cooldown`` is the number of picks that must pass before the
-    same artist can appear again. With ``cooldown=2`` (the default), a
-    playlist sequence like ``A, B, C, A, B, C, A`` is fine but
-    ``A, A, ...`` and ``A, B, A`` are not. Set to ``0`` or ``None`` to
-    allow back-to-back repeats. The cooldown is a sliding window over
-    the playlist's tail: it does not bound the total number of picks
-    per artist over the whole playlist, only their spacing.
+    ``artist_cooldown=True`` (default) applies a similarity penalty to
+    a candidate whose artist was picked within the last
+    ``_COOLDOWN_WIDTH`` picks. The penalty decays linearly from
+    ``_COOLDOWN_STRENGTH`` immediately after a pick down to zero by the
+    end of the window, so an artist gradually re-enters the pool rather
+    than snapping back in. A clearly more-similar same-artist track
+    can still win out — the cooldown nudges the order, it doesn't ban.
 
     ``dedupe_titles=False`` lets the same ``(artist, title)`` tag pair
     appear multiple times — useful when paths matter more than tags
@@ -130,21 +141,20 @@ class _DiversityPolicy:
     a title). The dedup rule is permanent for the playlist; unlike the
     cooldown, it never relaxes.
 
-    The defaults (cooldown=2, dedupe on) target the typical case: a
+    The defaults (cooldown on, dedupe on) target the typical case: a
     personal library where you don't want the same artist clustered
     back-to-back and don't want the same song from three different
-    compilations. The cooldown lets a single artist appear many times
-    in a long playlist as long as other artists appear between them.
+    compilations.
     """
 
-    artist_cooldown: int | None = 2
+    artist_cooldown: bool = True
     dedupe_titles: bool = True
 
     @classmethod
     def disabled(cls) -> _DiversityPolicy:
         """Pre-built policy with all rules off — equivalent to the
         pre-diversity behaviour. Useful in tests and as an opt-out."""
-        return cls(artist_cooldown=None, dedupe_titles=False)
+        return cls(artist_cooldown=False, dedupe_titles=False)
 
 
 class _DiversityState:
@@ -156,16 +166,20 @@ class _DiversityState:
 
     Tracks are addressed by their ``(artist, title)`` tag pair, both
     case-folded and stripped. Tracks with no artist tag are always
-    admissible — the cooldown can only act on what's identifiable.
+    admissible and incur no cooldown penalty — the cooldown can only
+    act on what's identifiable.
     """
 
     def __init__(self, policy: _DiversityPolicy) -> None:
         self.policy = policy
-        # Ordered history of normalised artist keys, one entry per
-        # recorded pick. Empty strings are appended for tag-less tracks
-        # so the cooldown window advances with playlist position.
-        self._history: list[str] = []
+        # Pick index of the most recent pick per normalised artist.
+        # Used to compute the cooldown penalty for any candidate.
+        self._last_seen: dict[str, int] = {}
         self._seen_titles: set[tuple[str, str]] = set()
+        # Picks recorded so far. Advances with every record() call,
+        # including tag-less picks, so the cooldown window measures
+        # playlist positions consistently.
+        self._n_picks = 0
 
     @staticmethod
     def _norm(s: str | None) -> str:
@@ -178,19 +192,39 @@ class _DiversityState:
             ``"ok"`` — admit; the caller should also call :meth:`record`.
             ``"duplicate"`` — same ``(artist, title)`` already in the
                 playlist; reject permanently.
-            ``"cooldown"`` — artist appeared within the cooldown window
-                of recent picks; reject in the constrained pass, accept
-                in the relaxation pass.
+
+        The cooldown is *not* a filter here — it's a similarity penalty
+        applied via :meth:`cooldown_penalty`. Any non-duplicate is
+        admissible; the picker just prefers higher effective scores.
         """
         a = self._norm(artist)
         t = self._norm(title)
         if self.policy.dedupe_titles and a and t and (a, t) in self._seen_titles:
             return "duplicate"
-        cooldown = self.policy.artist_cooldown
-        # `a and ...` short-circuits so tag-less tracks are always ok.
-        if cooldown and a and a in self._history[-cooldown:]:
-            return "cooldown"
         return "ok"
+
+    def cooldown_penalty(self, artist: str | None) -> float:
+        """Penalty to subtract from a candidate's similarity score so
+        the picker can rerank rather than filter. Returns ``0.0`` if
+        the cooldown is disabled, the artist is unseen or tag-less, or
+        the artist was last picked outside the cooldown window."""
+        if not self.policy.artist_cooldown:
+            return 0.0
+        a = self._norm(artist)
+        if not a:
+            return 0.0
+        last = self._last_seen.get(a)
+        if last is None:
+            return 0.0
+        # `_last_seen[a]` is the pick index at the time of recording;
+        # `_n_picks` already advanced past it. The number of *other*
+        # picks made since this artist last appeared is therefore
+        # ``_n_picks - last - 1`` (gap=0 immediately after the pick).
+        gap = self._n_picks - last - 1
+        if gap >= _COOLDOWN_WIDTH:
+            return 0.0
+        # Linear decay: full strength at gap=0, zero at gap=width.
+        return _COOLDOWN_STRENGTH * (1.0 - gap / _COOLDOWN_WIDTH)
 
     def record(self, artist: str | None, title: str | None) -> None:
         """Mark a candidate as picked. Caller is responsible for calling
@@ -199,10 +233,11 @@ class _DiversityState:
         t = self._norm(title)
         if a and t:
             self._seen_titles.add((a, t))
-        # Append unconditionally — the slot exists in the playlist even
-        # when the artist tag is empty, and the cooldown window measures
-        # positions, not entries.
-        self._history.append(a)
+        if a:
+            self._last_seen[a] = self._n_picks
+        # Advance even for tag-less picks so the window stays aligned
+        # with playlist position rather than identifiable-pick count.
+        self._n_picks += 1
 
 
 def _tags_lookup(
@@ -210,7 +245,7 @@ def _tags_lookup(
 ) -> dict[int, tuple[str | None, str | None]]:
     """Bulk-fetch ``{track_id: (artist, title)}`` for the playlist's model.
     Skips the DB call entirely when the policy is fully disabled."""
-    if policy.artist_cooldown is None and not policy.dedupe_titles:
+    if not policy.artist_cooldown and not policy.dedupe_titles:
         return {}
     return db.artist_title_by_id_for_model(model)
 
@@ -340,32 +375,27 @@ def generate_similar_playlist(
             and min(abs(bpm - s) for s in seed_bpms) > req.bpm_drift * 2
         )
 
-    def _best_pick(allow_cooldown: bool) -> int:
-        """Index into ``candidates`` of the best admissible pick, or -1."""
+    def _best_pick() -> int:
+        """Index into ``candidates`` of the candidate with the highest
+        effective similarity (raw similarity minus cooldown penalty),
+        or -1 if nothing's admissible. Dedup is the only hard filter;
+        the cooldown is folded into the score."""
         best_idx = -1
         best_score = -2.0
         for i, (tid, _path, _seed_score, emb) in enumerate(candidates):
             if not _passes_smoothness(tid, bpm_lookup.get(tid)):
                 continue
             artist, title = tags_lookup.get(tid, (None, None))
-            verdict = state.admit(artist, title)
-            if verdict == "duplicate":
+            if state.admit(artist, title) == "duplicate":
                 continue
-            if verdict == "cooldown" and not allow_cooldown:
-                continue
-            sim = float(emb @ prev_emb)
+            sim = float(emb @ prev_emb) - state.cooldown_penalty(artist)
             if sim > best_score:
                 best_score = sim
                 best_idx = i
         return best_idx
 
     while candidates and len(chosen) < req.n:
-        # Constrained pass: respect both dedup and artist cap.
-        best_idx = _best_pick(allow_cooldown=False)
-        # Relaxation pass: cap dropped, dedup still applies. Lets the
-        # playlist reach `n` even when one artist dominates the pool.
-        if best_idx < 0:
-            best_idx = _best_pick(allow_cooldown=True)
+        best_idx = _best_pick()
         if best_idx < 0:
             break
         picked = candidates.pop(best_idx)
@@ -491,16 +521,19 @@ def generate_chained_playlist(
     prev_scale: str | None = first_seed.get("scale")
 
     def _find_one_pick(
-        allow_cooldown: bool,
         chunk_prev_bpm: float | None,
         chunk_prev_key: str | None,
         chunk_prev_scale: str | None,
         in_chunk_ids: set[int],
     ) -> tuple[int, int, str | None, str | None] | None:
-        """Walk the sorted candidates and return the first admissible
-        pick as ``(idx_in_argsort, track_id, artist, title)``. Returns
-        ``None`` if nothing qualifies. Smoothness state (bpm/key) is
-        passed in so the caller advances it after each pick."""
+        """Find the candidate with the highest effective score (raw
+        similarity to the anchor minus cooldown penalty for its
+        artist), subject to dedup, smoothness, and the allowed-id gate.
+        Returns ``(idx_in_cached, track_id, artist, title)`` or
+        ``None`` if nothing qualifies."""
+        best_idx = -1
+        best_score = -math.inf
+        best_meta: tuple[str | None, str | None] = (None, None)
         for idx in np.argsort(-scores):
             tid = cached.ids[idx]
             if tid in visited or tid in in_chunk_ids:
@@ -535,19 +568,24 @@ def generate_chained_playlist(
                 continue
 
             artist, title = tags_lookup.get(tid, (None, None))
-            verdict = state.admit(artist, title)
-            if verdict == "duplicate":
-                continue
-            if verdict == "cooldown" and not allow_cooldown:
+            if state.admit(artist, title) == "duplicate":
                 continue
 
-            return (int(idx), tid, artist, title)
-        return None
+            effective = float(scores[idx]) - state.cooldown_penalty(artist)
+            if effective > best_score:
+                best_score = effective
+                best_idx = int(idx)
+                best_meta = (artist, title)
+        if best_idx < 0:
+            return None
+        tid = cached.ids[best_idx]
+        return (best_idx, tid, best_meta[0], best_meta[1])
 
     def _scan_chunk() -> list[tuple[Match, dict]]:
-        """Pick up to ``chunk_size`` tracks. Each pick is constrained-
-        first, relaxed-only-if-needed, so we never produce back-to-back
-        same artist when there's any other-artist candidate available."""
+        """Pick up to ``chunk_size`` tracks. Each pick maximises the
+        effective score (similarity − cooldown penalty) so a recent
+        artist's similarity needs to overshoot the alternatives by the
+        decaying penalty in order to be picked again."""
         chunk: list[tuple[Match, dict]] = []
         chunk_prev_bpm = prev_bpm
         chunk_prev_key = prev_key
@@ -556,21 +594,11 @@ def generate_chained_playlist(
 
         while len(chunk) < req.chunk_size:
             pick = _find_one_pick(
-                allow_cooldown=False,
                 chunk_prev_bpm=chunk_prev_bpm,
                 chunk_prev_key=chunk_prev_key,
                 chunk_prev_scale=chunk_prev_scale,
                 in_chunk_ids=in_chunk_ids,
             )
-            if pick is None:
-                # No constrained pick. Try once with cooldown relaxed.
-                pick = _find_one_pick(
-                    allow_cooldown=True,
-                    chunk_prev_bpm=chunk_prev_bpm,
-                    chunk_prev_key=chunk_prev_key,
-                    chunk_prev_scale=chunk_prev_scale,
-                    in_chunk_ids=in_chunk_ids,
-                )
             if pick is None:
                 break
             idx, tid, artist, title = pick
@@ -680,52 +708,29 @@ def generate_vibe_playlist(
     if req.shuffle:
         random.Random(req.seed).shuffle(pool)
 
-    # Apply diversity in pool order. The cooldown is a sliding window:
-    # a row that was on cooldown at iteration i may become admissible at
-    # iteration j>i once enough other-artist picks shift the window. So
-    # we do repeated constrained passes, only relaxing when a full pass
-    # makes no progress. Dedup is permanent and never relaxes.
+    # Pick by effective score: the row's pre-computed fitness minus
+    # the cooldown penalty for its artist. Re-evaluating per pick is
+    # O(n²), which is fine because the pool has hundreds of rows at
+    # most. Dedup is the only hard filter.
     state = _DiversityState(req.diversity)
     chosen: list[dict] = []
-    remaining = list(pool)
+    remaining = [(fitness(r), r) for r in pool]
 
     while len(chosen) < req.n and remaining:
-        chose_this_iter = False
-        # Phase 1: constrained — pick the first row that fully satisfies
-        # the policy. Drop duplicates as we encounter them.
-        i = 0
-        while i < len(remaining):
-            row = remaining[i]
-            verdict = state.admit(row.get("artist"), row.get("title"))
-            if verdict == "duplicate":
-                remaining.pop(i)
+        best_i = -1
+        best_score = -math.inf
+        for i, (fit, row) in enumerate(remaining):
+            if state.admit(row.get("artist"), row.get("title")) == "duplicate":
                 continue
-            if verdict == "ok":
-                remaining.pop(i)
-                chosen.append(row)
-                state.record(row.get("artist"), row.get("title"))
-                chose_this_iter = True
-                break
-            i += 1  # cooldown — keep for a later pass
-        if chose_this_iter:
-            continue
-        # Phase 2: relaxation for one pick. Take the first non-duplicate
-        # row even if it's still on cooldown. After the pick, the next
-        # iteration goes back to constrained mode.
-        i = 0
-        while i < len(remaining):
-            row = remaining[i]
-            verdict = state.admit(row.get("artist"), row.get("title"))
-            if verdict == "duplicate":
-                remaining.pop(i)
-                continue
-            remaining.pop(i)
-            chosen.append(row)
-            state.record(row.get("artist"), row.get("title"))
-            chose_this_iter = True
+            eff = fit - state.cooldown_penalty(row.get("artist"))
+            if eff > best_score:
+                best_score = eff
+                best_i = i
+        if best_i < 0:
             break
-        if not chose_this_iter:
-            break
+        _fit, row = remaining.pop(best_i)
+        chosen.append(row)
+        state.record(row.get("artist"), row.get("title"))
 
     return [
         Match(track_id=int(r["id"]), path=r["path"], score=float(fitness(r)))

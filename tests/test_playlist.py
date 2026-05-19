@@ -495,24 +495,49 @@ def test_chained_multiseed_include_seed_emits_each(make_db, fake_descriptors):
 
 
 class TestDiversityState:
-    """Unit tests for the helper that decides which candidates are admissible."""
+    """Unit tests for the helper that scores candidates and tracks dedup."""
 
     def _state(self, **policy):
         from harmonie.playlist import _DiversityPolicy, _DiversityState
 
         return _DiversityState(_DiversityPolicy(**policy))
 
-    def test_default_cooldown_blocks_recent_artist(self):
-        # Default cooldown=2 means the same artist can't appear within
-        # the last 2 picks — but is fine after 2 different-artist picks.
+    def test_admit_returns_only_ok_or_duplicate(self):
+        # The cooldown is now a soft penalty, not a verdict — admit only
+        # filters duplicates.
+        s = self._state()
+        assert s.admit("Aphex Twin", "Xtal") == "ok"
+        s.record("Aphex Twin", "Xtal")
+        assert s.admit("Aphex Twin", "Xtal") == "duplicate"
+        # Same artist different title still ok (penalty handles ranking).
+        assert s.admit("Aphex Twin", "Tha") == "ok"
+
+    def test_cooldown_penalty_is_max_immediately_after_pick(self):
+        from harmonie.playlist import _COOLDOWN_STRENGTH
+
         s = self._state()
         s.record("Aphex Twin", "Xtal")
-        s.record("Boards of Canada", "Roygbiv")
-        # Aphex Twin still in the last-2 window.
-        assert s.admit("Aphex Twin", "Tha") == "cooldown"
-        s.record("Burial", "Archangel")
-        # Now Aphex Twin is 3 picks back; outside the window.
-        assert s.admit("Aphex Twin", "Tha") == "ok"
+        # gap=0: full strength penalty.
+        assert s.cooldown_penalty("Aphex Twin") == _COOLDOWN_STRENGTH
+
+    def test_cooldown_penalty_decays_linearly_to_zero(self):
+        from harmonie.playlist import _COOLDOWN_STRENGTH, _COOLDOWN_WIDTH
+
+        s = self._state()
+        s.record("Aphex Twin", "Xtal")
+        for filler in range(_COOLDOWN_WIDTH - 1):
+            s.record(f"Filler{filler}", "x")
+            gap = filler + 1
+            expected = _COOLDOWN_STRENGTH * (1 - gap / _COOLDOWN_WIDTH)
+            assert s.cooldown_penalty("Aphex Twin") == expected
+        # One more filler pushes past the window.
+        s.record("End", "x")
+        assert s.cooldown_penalty("Aphex Twin") == 0.0
+
+    def test_unseen_artist_has_zero_penalty(self):
+        s = self._state()
+        s.record("Aphex Twin", "Xtal")
+        assert s.cooldown_penalty("Boards of Canada") == 0.0
 
     def test_default_dedupes_same_artist_title(self):
         s = self._state()
@@ -528,11 +553,11 @@ class TestDiversityState:
         s.record("Aphex Twin", "Xtal")
         assert s.admit("aphex twin", "  XTAL  ") == "duplicate"
 
-    def test_null_artist_is_always_admissible(self):
-        s = self._state(artist_cooldown=1)
+    def test_null_artist_has_zero_penalty(self):
+        s = self._state()
         s.record(None, "Untitled A")
-        # Cooldown can't apply without an artist key — admit freely
-        # regardless of how many tag-less tracks were just picked.
+        # Cooldown only acts on identifiable artists.
+        assert s.cooldown_penalty(None) == 0.0
         assert s.admit(None, "Untitled B") == "ok"
 
     def test_disabled_policy_admits_everything(self):
@@ -541,34 +566,20 @@ class TestDiversityState:
         s = _DiversityState(_DiversityPolicy.disabled())
         for _ in range(5):
             s.record("Aphex Twin", "Xtal")
+        # Dedup off, so repeats are admitted.
         assert s.admit("Aphex Twin", "Xtal") == "ok"
+        # Cooldown off, no penalty either.
+        assert s.cooldown_penalty("Aphex Twin") == 0.0
 
     def test_dedupe_disabled_lets_repeats_through(self):
-        s = self._state(dedupe_titles=False, artist_cooldown=0)
+        s = self._state(dedupe_titles=False, artist_cooldown=False)
         s.record("Aphex Twin", "Xtal")
         assert s.admit("Aphex Twin", "Xtal") == "ok"
 
-    def test_cooldown_disabled_lets_artist_repeat_back_to_back(self):
-        s = self._state(artist_cooldown=None)
-        for i in range(3):
-            s.record("Aphex Twin", f"track-{i}")
-        assert s.admit("Aphex Twin", "track-4") == "ok"
-
-    def test_cooldown_zero_lets_artist_repeat_back_to_back(self):
-        # Both 0 and None disable the cooldown (zero-length window).
-        s = self._state(artist_cooldown=0)
+    def test_cooldown_disabled_zeroes_the_penalty(self):
+        s = self._state(artist_cooldown=False)
         s.record("Aphex Twin", "Xtal")
-        assert s.admit("Aphex Twin", "Tha") == "ok"
-
-    def test_cooldown_window_is_a_sliding_tail(self):
-        # Cooldown=3 means the artist must have appeared >3 picks ago.
-        s = self._state(artist_cooldown=3)
-        s.record("Aphex Twin", "Xtal")
-        for filler_artist in ["B", "C", "D"]:
-            assert s.admit("Aphex Twin", "later") == "cooldown"
-            s.record(filler_artist, f"f-{filler_artist}")
-        # 3 different-artist picks in between; Aphex Twin now eligible.
-        assert s.admit("Aphex Twin", "later") == "ok"
+        assert s.cooldown_penalty("Aphex Twin") == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -655,7 +666,7 @@ class TestSimilarPlaylistDiversity:
             db,
             index,
             SimilarPlaylistRequest(
-                seed_ids=[seed], n=5, diversity=_DiversityPolicy(artist_cooldown=2)
+                seed_ids=[seed], n=5, diversity=_DiversityPolicy(artist_cooldown=True)
             ),
         )
         # Cooldown relaxed — we got the full 5 even though they're all OneArtist.

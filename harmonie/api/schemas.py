@@ -212,19 +212,16 @@ class _PlaylistCommon(BaseModel):
         None,
         description="Hard constraints on the candidate pool.",
     )
-    artist_cooldown: int | None = Field(
-        2,
-        ge=0,
+    artist_cooldown: bool = Field(
+        True,
         description=(
-            "Minimum number of picks between repeats by the same artist. "
-            "Default ``2`` means at least 2 different-artist tracks "
-            "between any two same-artist tracks (so an artist can appear "
-            "many times in a long playlist, but not back-to-back or "
-            "near-back-to-back). Set to ``0`` or ``null`` to disable the "
-            "cooldown. The cooldown relaxes automatically when no other "
-            "candidates remain — better to ship a longer playlist with "
-            "some clustering than truncate at a short length. Tracks "
-            "with no artist tag are always admitted."
+            "Apply a soft cooldown that discourages picking tracks from "
+            "the same artist in quick succession. The penalty fades over "
+            "the next few picks, so an artist can recur naturally later "
+            "in the playlist. A clearly more-similar same-artist track "
+            "can still win — the cooldown nudges the order, it doesn't "
+            "ban. Set to ``false`` to disable. Tracks with no artist tag "
+            "are unaffected."
         ),
     )
     dedupe_titles: bool = Field(

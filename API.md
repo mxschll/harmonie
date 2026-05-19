@@ -127,7 +127,7 @@ These apply to every mode:
 | --- | --- | --- |
 | `n` | `20` | How many tracks to return (1–500). |
 | `filter` | _(none)_ | Hard candidate-pool gate. See [Filters](#filters). |
-| `artist_cooldown` | `2` | Minimum number of picks between repeats by the same artist. Default `2` means at least 2 different-artist tracks separate any two same-artist tracks — so an artist can appear many times in a long playlist, just never back-to-back or near-back-to-back. Set to `0` or `null` to allow back-to-back. The cooldown relaxes automatically when no other candidate fits (better to ship a longer playlist with some clustering than truncate it). Tracks with no `artist` tag are always admitted. |
+| `artist_cooldown` | `true` | When `true` (default), apply a soft cooldown that discourages picking tracks from the same artist in quick succession. The penalty fades over the next few picks, so an artist re-enters the pool gradually rather than snapping back in. A clearly more-similar same-artist track can still win — the cooldown nudges the order, it doesn't ban. Set to `false` to disable. Tracks with no `artist` tag are unaffected. |
 | `dedupe_titles` | `true` | Skip tracks whose `(artist, title)` tag pair already appeared earlier in the playlist — same song from multiple albums or compilations shows up only once. Comparison is case-insensitive and whitespace-trimmed. Set to `false` to keep duplicates. Unlike the cooldown, the dedup never relaxes. |
 
 #### Mode `similar`: track radio
