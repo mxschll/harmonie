@@ -435,7 +435,7 @@ def make_playlist(
 
     try:
         diversity = _DiversityPolicy(
-            max_per_artist=body.max_per_artist,
+            artist_cooldown=body.artist_cooldown,
             dedupe_titles=body.dedupe_titles,
         )
         if isinstance(body, SimilarPlaylist):
