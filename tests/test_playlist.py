@@ -169,6 +169,64 @@ def test_vibe_playlist_filters_and_targets(make_db, fake_descriptors):
         assert 120 <= row["bpm"] <= 130
 
 
+def test_vibe_playlist_honors_genre_and_style_filters(make_db, fake_descriptors):
+    """Vibe mode must apply the same genre/style filter semantics as
+    ``GET /tracks``. Three styles in the pool, three filter shapes."""
+    db, _index = make_db()
+    emb = np.zeros(4, dtype=np.float32)
+    db.upsert_track(
+        path="/elec_house",
+        size=1,
+        mtime=1.0,
+        duration=1.0,
+        embedding=emb,
+        model="m1",
+        descriptors=fake_descriptors(bpm=128),
+        descriptor_version=DESCRIPTOR_VERSION,
+        top_styles=[("Electronic---House", 0.9)],
+    )
+    db.upsert_track(
+        path="/elec_techno",
+        size=1,
+        mtime=1.0,
+        duration=1.0,
+        embedding=emb,
+        model="m1",
+        descriptors=fake_descriptors(bpm=128),
+        descriptor_version=DESCRIPTOR_VERSION,
+        top_styles=[("Electronic---Techno", 0.9)],
+    )
+    db.upsert_track(
+        path="/pop_house",
+        size=1,
+        mtime=1.0,
+        duration=1.0,
+        embedding=emb,
+        model="m1",
+        descriptors=fake_descriptors(bpm=128),
+        descriptor_version=DESCRIPTOR_VERSION,
+        top_styles=[("Pop---House", 0.9)],
+    )
+
+    def _vibe(filter):
+        return {
+            db.get_track_by_id(m.track_id)["path"]
+            for m in generate_vibe_playlist(
+                db,
+                VibePlaylistRequest(n=10, shuffle=False, descriptor_filter=filter),
+            )
+        }
+
+    # Genre filter narrows to the Electronic--- branch.
+    assert _vibe(TrackFilter(genres=["Electronic"])) == {"/elec_house", "/elec_techno"}
+    # Style filter narrows to the *---House branch across genres.
+    assert _vibe(TrackFilter(styles=["House"])) == {"/elec_house", "/pop_house"}
+    # Both axes given collapse to exact-label match.
+    assert _vibe(TrackFilter(genres=["Electronic"], styles=["House"])) == {
+        "/elec_house"
+    }
+
+
 # ---------------------------------------------------------------------------
 # Chained playlist
 # ---------------------------------------------------------------------------
