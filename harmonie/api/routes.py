@@ -495,6 +495,8 @@ def make_playlist(
                     descriptor_filter=descriptor_filter,
                     include_seeds=body.include_seeds,
                     diversity=diversity,
+                    variation=body.variation,
+                    rng_seed=body.rng_seed,
                 ),
             )
         elif isinstance(body, DriftPlaylist):
@@ -510,6 +512,8 @@ def make_playlist(
                     bpm_drift=body.smooth_transitions.bpm_tolerance,
                     harmonic_mix=body.smooth_transitions.key_compatible,
                     diversity=diversity,
+                    variation=body.variation,
+                    rng_seed=body.rng_seed,
                 ),
             )
         elif isinstance(body, VibePlaylist):

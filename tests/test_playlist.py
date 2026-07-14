@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import random
+
 import numpy as np
 
 from harmonie.db import TrackFilter
@@ -140,6 +142,57 @@ def test_similar_playlist_harmonic_mix(make_db, fake_descriptors):
     # /incompat must not appear because F# major isn't in 8A's compatible set.
     incompat_paths = {m.path for m in items if m.track_id != compat}
     assert "/incompat" not in incompat_paths
+
+
+class TestBoundedVariationPicker:
+    @staticmethod
+    def _pick(scores, seed):
+        from harmonie.playlist import (
+            _DiversityPolicy,
+            _DiversityState,
+            _pick_admissible,
+        )
+
+        return _pick_admissible(
+            list(range(len(scores))),
+            _DiversityState(_DiversityPolicy.disabled()),
+            score_fn=lambda i: scores[i],
+            artist_title_fn=lambda _i: (None, None),
+            variation=1.0,
+            rng=random.Random(seed),
+        )
+
+    def test_rng_seed_is_reproducible(self):
+        scores = [1.0, 0.99, 0.98]
+        assert self._pick(scores, 42) == self._pick(scores, 42)
+
+    def test_different_seeds_can_vary_the_pick(self):
+        scores = [1.0, 0.99, 0.98]
+        picks = {self._pick(scores, seed) for seed in range(20)}
+        assert len(picks) > 1
+
+    def test_never_picks_outside_similarity_band(self):
+        # At maximum variation the service admits at most a 0.03 score
+        # drop. The 0.969 and 0.5 candidates must therefore never win.
+        scores = [1.0, 0.98, 0.969, 0.5]
+        picks = {self._pick(scores, seed) for seed in range(100)}
+        assert picks <= {0, 1}
+
+    def test_zero_variation_preserves_argmax(self):
+        from harmonie.playlist import (
+            _DiversityPolicy,
+            _DiversityState,
+            _pick_admissible,
+        )
+
+        picked = _pick_admissible(
+            [0, 1, 2],
+            _DiversityState(_DiversityPolicy.disabled()),
+            score_fn=lambda i: [0.98, 1.0, 0.99][i],
+            artist_title_fn=lambda _i: (None, None),
+            variation=0.0,
+        )
+        assert picked == 1
 
 
 # ---------------------------------------------------------------------------

@@ -122,6 +122,12 @@ _AdmitVerdict = Literal["ok", "duplicate"]
 _COOLDOWN_WIDTH = 3
 _COOLDOWN_STRENGTH = 0.2
 
+# Randomised picks are always constrained to candidates whose effective
+# score is close to the deterministic winner. Keeping this ceiling in the
+# service guarantees variation cannot turn a similarity playlist into an
+# unrelated shuffle.
+_MAX_VARIATION_SCORE_DROP = 0.03
+
 
 @dataclass(frozen=True)
 class _DiversityPolicy:
@@ -288,6 +294,58 @@ def _argmax_admissible(
     return best_idx
 
 
+def _pick_admissible(
+    candidates: list[_T],
+    state: _DiversityState,
+    *,
+    score_fn: Callable[[_T], float],
+    artist_title_fn: Callable[[_T], tuple[str | None, str | None]],
+    filter_fn: Callable[[_T], bool] | None = None,
+    variation: float = 0.0,
+    rng: random.Random | None = None,
+) -> int:
+    """Pick an admissible candidate, optionally with bounded randomness.
+
+    ``variation=0`` delegates to the historical argmax implementation so
+    existing playlists remain exactly deterministic. Positive values widen
+    a score band up to :data:`_MAX_VARIATION_SCORE_DROP`; candidates inside
+    it are sampled with exponentially greater weight for better scores.
+    """
+    if variation <= 0.0:
+        return _argmax_admissible(
+            candidates,
+            state,
+            score_fn=score_fn,
+            artist_title_fn=artist_title_fn,
+            filter_fn=filter_fn,
+        )
+
+    admissible: list[tuple[int, float]] = []
+    for i, cand in enumerate(candidates):
+        if filter_fn is not None and not filter_fn(cand):
+            continue
+        artist, title = artist_title_fn(cand)
+        if state.admit(artist, title) == "duplicate":
+            continue
+        effective_score = score_fn(cand) - state.cooldown_penalty(artist)
+        admissible.append((i, effective_score))
+
+    if not admissible:
+        return -1
+
+    best_score = max(score for _, score in admissible)
+    score_band = _MAX_VARIATION_SCORE_DROP * variation
+    eligible = [
+        (i, score) for i, score in admissible if score >= best_score - score_band
+    ]
+    if len(eligible) == 1:
+        return eligible[0][0]
+
+    picker = rng if rng is not None else random.Random()
+    weights = [math.exp((score - best_score) / score_band) for _, score in eligible]
+    return picker.choices([i for i, _ in eligible], weights=weights, k=1)[0]
+
+
 # ---------------------------------------------------------------------------
 # Similar-seeded playlist
 # ---------------------------------------------------------------------------
@@ -302,6 +360,8 @@ class SimilarPlaylistRequest:
     descriptor_filter: TrackFilter | None = None
     include_seeds: bool = False
     diversity: _DiversityPolicy = field(default_factory=_DiversityPolicy)
+    variation: float = 0.0
+    rng_seed: int | None = None
 
 
 def generate_similar_playlist(
@@ -311,6 +371,8 @@ def generate_similar_playlist(
         raise ValueError("seed_ids must contain at least one track id")
     if req.n <= 0:
         return []
+    if not 0.0 <= req.variation <= 1.0:
+        raise ValueError("variation must be between 0 and 1")
 
     # Resolve seed metadata (model, key, bpm) — embeddings come from the index.
     seed_rows = []
@@ -397,6 +459,7 @@ def generate_similar_playlist(
     chosen: list[tuple[int, str, float, np.ndarray]] = []
     prev_emb: np.ndarray = centroid_n
     prev_bpm: float | None = seed_bpms[0] if seed_bpms else None
+    rng = random.Random(req.rng_seed)
 
     def _passes_smoothness(tid: int, bpm: float | None) -> bool:
         if req.bpm_drift is None:
@@ -414,12 +477,14 @@ def generate_similar_playlist(
         )
 
     while candidates and len(chosen) < req.n:
-        best_idx = _argmax_admissible(
+        best_idx = _pick_admissible(
             candidates,
             state,
             score_fn=lambda c, _p=prev_emb: float(c[3] @ _p),
             artist_title_fn=lambda c: tags_lookup.get(c[0], (None, None)),
             filter_fn=lambda c: _passes_smoothness(c[0], bpm_lookup.get(c[0])),
+            variation=req.variation,
+            rng=rng,
         )
         if best_idx < 0:
             break
@@ -468,6 +533,8 @@ class ChainedPlaylistRequest:
     bpm_drift: float | None = None
     harmonic_mix: bool = False
     diversity: _DiversityPolicy = field(default_factory=_DiversityPolicy)
+    variation: float = 0.0
+    rng_seed: int | None = None
 
 
 def generate_chained_playlist(
@@ -479,6 +546,8 @@ def generate_chained_playlist(
         raise ValueError("seed_ids must contain at least one track id")
     if req.n < 1:
         return []
+    if not 0.0 <= req.variation <= 1.0:
+        raise ValueError("variation must be between 0 and 1")
 
     # Resolve all seed rows up front and verify they share a model.
     seed_rows = []
@@ -544,6 +613,7 @@ def generate_chained_playlist(
     prev_bpm: float | None = first_seed.get("bpm")
     prev_key: str | None = first_seed.get("key")
     prev_scale: str | None = first_seed.get("scale")
+    rng = random.Random(req.rng_seed)
 
     def _smoothness_ok(
         cand_bpm: float | None,
@@ -596,7 +666,7 @@ def generate_chained_playlist(
             return m if m is not None else (None, None, None)
 
         while len(chunk) < req.chunk_size and cand_idxs:
-            best = _argmax_admissible(
+            best = _pick_admissible(
                 cand_idxs,
                 state,
                 score_fn=lambda i: float(scores[i]),
@@ -607,6 +677,8 @@ def generate_chained_playlist(
                     cached.ids[i] not in in_chunk_ids
                     and _smoothness_ok(*_meta(i), _bpm, _key, _scale)
                 ),
+                variation=req.variation,
+                rng=rng,
             )
             if best < 0:
                 break

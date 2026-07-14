@@ -489,6 +489,8 @@ flowchart TD
 | `seeds` | int\[\] | `[]` | Pre-resolved track IDs. |
 | `seed_refs` | object\[\] | `[]` | Inline path/tag references. See [Inline seed references](#inline-seed-references). |
 | `include_seeds` | bool | `false` | Include the seed track(s) in the result. |
+| `variation` | float | `0.0` | Bounded selection variation from `0.0` (deterministic) to `1.0` (maximum). Random picks remain within the service-controlled similarity band. |
+| `rng_seed` | int or null | `null` | Seed for reproducible variation. `null` uses fresh randomness. |
 | `smooth_transitions.bpm_tolerance` | float | `null` | Max BPM gap between consecutive picks. Lenient on missing BPMs. |
 | `smooth_transitions.key_compatible` | bool | `false` | Restrict consecutive picks to harmonically compatible keys (Camelot wheel: same key, ±1 number, parallel mode). Strict — tracks without key info are dropped. |
 
@@ -533,7 +535,7 @@ flowchart TD
 
 **Body fields**
 
-`drift` accepts every field from `similar` (`seeds`, `seed_refs`, `include_seeds`, `smooth_transitions`) plus:
+`drift` accepts every field from `similar` (`seeds`, `seed_refs`, `include_seeds`, `smooth_transitions`, `variation`, `rng_seed`) plus:
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |

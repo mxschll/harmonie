@@ -376,6 +376,37 @@ class TestPlaylistDiscriminator:
         )
         assert r.status_code == 422
 
+    @pytest.mark.parametrize("variation", [-0.01, 1.01])
+    def test_seeded_variation_out_of_range_rejected(self, client, variation):
+        c, db = client
+        track_id = list(db.list_tracks(limit=1)[0])[0]["id"]
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "similar",
+                "seeds": [track_id],
+                "variation": variation,
+            },
+        )
+        assert r.status_code == 422
+
+    @pytest.mark.parametrize("mode", ["similar", "drift"])
+    def test_seeded_modes_accept_variation_and_rng_seed(self, client, mode):
+        c, db = client
+        track_id = list(db.list_tracks(limit=1)[0])[0]["id"]
+        request = {
+            "mode": mode,
+            "n": 3,
+            "seeds": [track_id],
+            "variation": 0.5,
+            "rng_seed": 42,
+        }
+        first = c.post("/api/v1/playlists", json=request)
+        second = c.post("/api/v1/playlists", json=request)
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert first.json() == second.json()
+
     def test_drift_mode_accepts_multiple_seeds(self, client):
         """Drift mode now allows >1 seed; the centroid becomes the starting
         anchor. Previously this was a schema rejection (max_length=1)."""

@@ -271,6 +271,20 @@ class _SeededPlaylist(_PlaylistCommon):
             "track are reported in ``unresolved_seed_refs``."
         ),
     )
+    variation: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Amount of bounded randomness applied while selecting among "
+            "similarly scored tracks. 0 is deterministic; 1 uses the widest "
+            "service-controlled similarity band."
+        ),
+    )
+    rng_seed: int | None = Field(
+        None,
+        description="Seed for reproducible variation. Null uses fresh randomness.",
+    )
 
     @model_validator(mode="after")
     def _at_least_one_seed(self) -> _SeededPlaylist:
