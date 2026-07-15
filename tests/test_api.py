@@ -357,6 +357,18 @@ class TestResolve:
 
 
 class TestPlaylistDiscriminator:
+    def test_duplicate_seed_weights_are_summed(self):
+        from harmonie.api.routes import _merge_seeds
+
+        ids, weights = _merge_seeds(
+            seeds=[42, 117, 42],
+            seed_weights=[3.0, 2.0, 4.0],
+            resolved=[117, 9],
+        )
+
+        assert ids == [42, 117, 9]
+        assert weights == [7.0, 3.0, 1.0]
+
     def test_similar_mode_required_seeds(self, client):
         c, db = client
         track_id = list(db.list_tracks(limit=1)[0])[0]["id"]
@@ -375,6 +387,33 @@ class TestPlaylistDiscriminator:
             json={"mode": "similar", "n": 2, "seeds": []},
         )
         assert r.status_code == 422
+
+    @pytest.mark.parametrize(
+        "weights",
+        [[1.0], [1.0, 0.0], [1.0, -1.0]],
+    )
+    def test_seed_weights_require_matching_positive_values(self, client, weights):
+        c, db = client
+        ids = [int(row["id"]) for row in db.list_tracks(limit=2)[0]]
+        r = c.post(
+            "/api/v1/playlists",
+            json={"mode": "similar", "seeds": ids, "seed_weights": weights},
+        )
+        assert r.status_code == 422
+
+    def test_seeded_modes_accept_weights(self, client):
+        c, db = client
+        ids = [int(row["id"]) for row in db.list_tracks(limit=2)[0]]
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "similar",
+                "n": 2,
+                "seeds": ids,
+                "seed_weights": [4.0, 1.0],
+            },
+        )
+        assert r.status_code == 200, r.text
 
     @pytest.mark.parametrize("variation", [-0.01, 1.01])
     def test_seeded_variation_out_of_range_rejected(self, client, variation):

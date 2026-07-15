@@ -144,6 +144,30 @@ def test_similar_playlist_harmonic_mix(make_db, fake_descriptors):
     assert "/incompat" not in incompat_paths
 
 
+def test_similar_playlist_weights_shift_seed_centroid(make_db, fake_descriptors):
+    db, index = make_db()
+    seed_a = _add(
+        db, "/seed-a", np.array([1.0, 0.0], dtype=np.float32), fake_descriptors()
+    )
+    seed_b = _add(
+        db, "/seed-b", np.array([0.0, 1.0], dtype=np.float32), fake_descriptors()
+    )
+    _add(db, "/near-a", np.array([0.98, 0.2], dtype=np.float32), fake_descriptors())
+    _add(db, "/middle", np.array([0.7, 0.7], dtype=np.float32), fake_descriptors())
+
+    unweighted = generate_similar_playlist(
+        db, index, SimilarPlaylistRequest(seed_ids=[seed_a, seed_b], n=1)
+    )
+    weighted = generate_similar_playlist(
+        db,
+        index,
+        SimilarPlaylistRequest(seed_ids=[seed_a, seed_b], seed_weights=[8.0, 1.0], n=1),
+    )
+
+    assert unweighted[0].path == "/middle"
+    assert weighted[0].path == "/near-a"
+
+
 class TestBoundedVariationPicker:
     @staticmethod
     def _pick(scores, seed):

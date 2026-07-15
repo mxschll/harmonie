@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -263,6 +264,14 @@ class _SeededPlaylist(_PlaylistCommon):
         default_factory=list,
         description="Pre-resolved seed track IDs.",
     )
+    seed_weights: list[float] = Field(
+        default_factory=list,
+        description=(
+            "Optional positive weights aligned with ``seeds``. Empty means "
+            "every explicit seed has weight 1. Duplicate seed IDs have their "
+            "weights summed. Resolved ``seed_refs`` always contribute weight 1."
+        ),
+    )
     seed_refs: list[SeedRef] = Field(
         default_factory=list,
         description=(
@@ -290,6 +299,12 @@ class _SeededPlaylist(_PlaylistCommon):
     def _at_least_one_seed(self) -> _SeededPlaylist:
         if not self.seeds and not self.seed_refs:
             raise ValueError("playlist requires at least one of: seeds, seed_refs")
+        if self.seed_weights and len(self.seed_weights) != len(self.seeds):
+            raise ValueError("seed_weights must have the same length as seeds")
+        if any(
+            not math.isfinite(weight) or weight <= 0 for weight in self.seed_weights
+        ):
+            raise ValueError("seed_weights must contain only finite positive values")
         return self
 
 

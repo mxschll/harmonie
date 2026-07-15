@@ -365,6 +365,7 @@ def _pick_admissible(
 @dataclass
 class SimilarPlaylistRequest:
     seed_ids: list[int]
+    seed_weights: list[float] | None = None
     n: int = 20
     bpm_drift: float | None = None
     harmonic_mix: bool = False
@@ -384,6 +385,11 @@ def generate_similar_playlist(
         return []
     if not 0.0 <= req.variation <= 1.0:
         raise ValueError("variation must be between 0 and 1")
+    if req.seed_weights is not None:
+        if len(req.seed_weights) != len(req.seed_ids):
+            raise ValueError("seed_weights must have the same length as seed_ids")
+        if any(not math.isfinite(weight) or weight <= 0 for weight in req.seed_weights):
+            raise ValueError("seed_weights must contain only finite positive values")
 
     # Resolve seed metadata (model, key, bpm) — embeddings come from the index.
     seed_rows = []
@@ -409,7 +415,11 @@ def generate_similar_playlist(
         if idx is None:
             return []  # stale state; bail
         seed_indices.append(idx)
-    centroid = cached.matrix[seed_indices].mean(axis=0)
+    seed_weights = np.asarray(
+        req.seed_weights if req.seed_weights is not None else [1.0] * len(seed_indices),
+        dtype=np.float32,
+    )
+    centroid = np.average(cached.matrix[seed_indices], axis=0, weights=seed_weights)
 
     # Allowed-ID gate: descriptor filter plus optional harmonic-mix restriction.
     allowed_ids: set[int] | None = None
@@ -537,6 +547,7 @@ class ChainedPlaylistRequest:
     """
 
     seed_ids: list[int]
+    seed_weights: list[float] | None = None
     chunk_size: int = 5
     n: int = 20
     descriptor_filter: TrackFilter | None = None
@@ -559,6 +570,11 @@ def generate_chained_playlist(
         return []
     if not 0.0 <= req.variation <= 1.0:
         raise ValueError("variation must be between 0 and 1")
+    if req.seed_weights is not None:
+        if len(req.seed_weights) != len(req.seed_ids):
+            raise ValueError("seed_weights must have the same length as seed_ids")
+        if any(not math.isfinite(weight) or weight <= 0 for weight in req.seed_weights):
+            raise ValueError("seed_weights must contain only finite positive values")
 
     # Resolve all seed rows up front and verify they share a model.
     seed_rows = []
@@ -615,7 +631,11 @@ def generate_chained_playlist(
 
     # L2-normalized centroid of the seed embeddings, used as the starting
     # anchor. Collapses to the single seed's vector when there's one seed.
-    anchor_emb = cached.matrix[seed_indices].mean(axis=0)
+    seed_weights = np.asarray(
+        req.seed_weights if req.seed_weights is not None else [1.0] * len(seed_indices),
+        dtype=np.float32,
+    )
+    anchor_emb = np.average(cached.matrix[seed_indices], axis=0, weights=seed_weights)
     anchor_emb = l2_normalize_vec(anchor_emb.astype(np.float32, copy=False))
 
     # Consecutive-transition baseline starts at the first seed. Updates to

@@ -487,6 +487,7 @@ flowchart TD
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `seeds` | int\[\] | `[]` | Pre-resolved track IDs. |
+| `seed_weights` | float\[\] | `[]` | Optional positive weights aligned with `seeds`. Empty means weight 1 for every seed. Duplicate IDs have their weights summed. |
 | `seed_refs` | object\[\] | `[]` | Inline path/tag references. See [Inline seed references](#inline-seed-references). |
 | `include_seeds` | bool | `false` | Include the seed track(s) in the result. |
 | `variation` | float | `0.0` | Bounded selection variation from `0.0` (deterministic) to `1.0` (maximum). Random picks remain within the service-controlled similarity band. |
@@ -535,7 +536,7 @@ flowchart TD
 
 **Body fields**
 
-`drift` accepts every field from `similar` (`seeds`, `seed_refs`, `include_seeds`, `smooth_transitions`, `variation`, `rng_seed`) plus:
+`drift` accepts every field from `similar` (`seeds`, `seed_weights`, `seed_refs`, `include_seeds`, `smooth_transitions`, `variation`, `rng_seed`) plus:
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -624,7 +625,7 @@ When the client only has paths or tags (not harmonie's IDs), send `seed_refs` in
 
 The playlist is built from whichever refs did resolve. The request fails with `400` only if every ref *and* every explicit `seeds` ID fail.
 
-`seeds` and `seed_refs` can be combined. The merged seed list keeps `seeds` order first, then resolved-ref order, deduped.
+`seeds` and `seed_refs` can be combined. The merged list keeps explicit-seed order first, then resolved-reference order. Duplicate IDs collapse to one seed and their weights are summed; every resolved reference contributes weight `1`.
 
 **Example**
 

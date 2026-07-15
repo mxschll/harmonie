@@ -431,15 +431,24 @@ def _resolve_seed_refs(
     return resolved, unresolved
 
 
-def _merge_seed_ids(seeds: list[int], resolved: list[int]) -> list[int]:
-    """Concatenate ``seeds`` and ``resolved``, preserving order, deduping."""
+def _merge_seeds(
+    seeds: list[int], seed_weights: list[float], resolved: list[int]
+) -> tuple[list[int], list[float]]:
+    """Merge explicit and resolved seeds, summing duplicate weights."""
     out: list[int] = []
-    seen: set[int] = set()
-    for sid in (*seeds, *resolved):
-        if sid not in seen:
+    weights_by_id: dict[int, float] = {}
+    explicit_weights = seed_weights or [1.0] * len(seeds)
+    for sid, weight in zip(seeds, explicit_weights):
+        if sid not in weights_by_id:
             out.append(sid)
-            seen.add(sid)
-    return out
+            weights_by_id[sid] = 0.0
+        weights_by_id[sid] += weight
+    for sid in resolved:
+        if sid not in weights_by_id:
+            out.append(sid)
+            weights_by_id[sid] = 0.0
+        weights_by_id[sid] += 1.0
+    return out, [weights_by_id[sid] for sid in out]
 
 
 @api_router.post("/playlists", response_model=PlaylistResult)
@@ -469,7 +478,9 @@ def make_playlist(
     unresolved: list[UnresolvedSeedRef] = []
     if isinstance(body, (SimilarPlaylist, DriftPlaylist)):
         resolved_ids, unresolved = _resolve_seed_refs(db, body.seed_refs)
-        merged_seed_ids = _merge_seed_ids(body.seeds, resolved_ids)
+        merged_seed_ids, merged_seed_weights = _merge_seeds(
+            body.seeds, body.seed_weights, resolved_ids
+        )
         if not merged_seed_ids:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -477,6 +488,7 @@ def make_playlist(
             )
     else:
         merged_seed_ids = []
+        merged_seed_weights = []
 
     try:
         diversity = _DiversityPolicy(
@@ -489,6 +501,7 @@ def make_playlist(
                 index,
                 SimilarPlaylistRequest(
                     seed_ids=merged_seed_ids,
+                    seed_weights=merged_seed_weights,
                     n=body.n,
                     bpm_drift=body.smooth_transitions.bpm_tolerance,
                     harmonic_mix=body.smooth_transitions.key_compatible,
@@ -505,6 +518,7 @@ def make_playlist(
                 index,
                 ChainedPlaylistRequest(
                     seed_ids=merged_seed_ids,
+                    seed_weights=merged_seed_weights,
                     chunk_size=body.chunk_size,
                     n=body.n,
                     descriptor_filter=descriptor_filter,
