@@ -4,13 +4,15 @@
 [![Tests (Python 3.11)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml)
 [![Lint](https://github.com/mxschll/harmonie/actions/workflows/lint.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/lint.yml)
 
-Audio similarity service. Scans a music library, extracts a per-track embedding plus musical descriptors (BPM, key, loudness, danceability, onset rate), classifies each track against [400 Discogs styles](https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json), and reads file tags (artist, album, title, track number) using [Essentia](https://essentia.upf.edu/) and [mutagen](https://mutagen.readthedocs.io/). Everything is stored in SQLite and exposed via an HTTP API for similarity queries, style-filtered listings, and playlist generation.
+Harmonie provides audio similarity and playlist generation for local music libraries. It analyzes each track with [Essentia](https://essentia.upf.edu/) to produce an audio embedding, musical descriptors, and probabilities for [400 Discogs styles](https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json). [Mutagen](https://mutagen.readthedocs.io/) reads artist, album, title, and track-number tags.
+
+Results are stored in SQLite and exposed through an HTTP API for similarity search, filtered track listings, and playlist generation. Harmonie is the analysis service used by the [Jellyfin Harmonie plugin](https://github.com/mxschll/jellyfin-harmonie).
 
 ## Requirements
 
-* Python 3.9 - 3.12 (the upstream `essentia-tensorflow` wheels don't cover 3.13+ yet)
-* x86_64 CPU (essentially anything from the last decade) or Apple Silicon
-* ~1 GB RAM per worker process during extraction; budget accordingly
+- Python 3.9–3.12; `essentia-tensorflow` does not provide Python 3.13 wheels
+- x86_64 or Apple Silicon
+- Approximately 1 GB of RAM per analysis worker
 
 ## Contents
 
@@ -18,12 +20,13 @@ Audio similarity service. Scans a music library, extracts a per-track embedding 
 - [API](#api) (full reference in [API.md](API.md))
 - [Configuration](#configuration)
 - [Running as a service](#running-as-a-service)
+- [Development](#development)
 
 ## Install
 
-[pipx][pipx] puts harmonie in its own isolated virtualenv with the `harmonie` binary on your PATH. The `--pre` flag is needed because `essentia-tensorflow` is published as a `.dev` pre-release.
+[pipx][pipx] installs Harmonie in an isolated environment and adds the `harmonie` command to your `PATH`. The `--pre` flag is required because `essentia-tensorflow` is published as a development release.
 
-If your system Python is 3.9 - 3.12:
+If your system Python is 3.9–3.12:
 
 ```bash
 sudo apt install pipx
@@ -50,7 +53,7 @@ Update with `pipx upgrade harmonie`.
 
 ### First scan
 
-On first start, harmonie scans your library. Effnet inference is about a second per track on a modern x86 core. Throughput scales roughly with `HARMONIE_WORKERS` until storage I/O becomes the bottleneck. A 50k-track library on a fast box takes around a day. Subsequent scans are incremental: only files whose size or mtime changed get re-extracted.
+On first start, Harmonie scans the complete library. Analysis takes about one second per track on a modern x86 core and scales with `HARMONIE_WORKERS` until limited by storage throughput. Subsequent scans only reanalyze files whose size or modification time changed.
 
 Watch progress and trigger another scan:
 
@@ -64,7 +67,7 @@ curl -X POST http://localhost:8842/api/v1/scan | json_pp
 
 ## API
 
-Harmonie exposes an HTTP API under `/api/v1/`. See [API.md](API.md) for the full reference.
+Harmonie exposes its HTTP API under `/api/v1/`. See [API.md](API.md) for endpoints, request fields, and examples.
 
 ## Configuration
 
@@ -74,7 +77,7 @@ All settings come from environment variables (or a `.env` file in the working di
 | --- | --- | --- |
 | `HARMONIE_LIBRARIES` | (none) | Comma- or colon-separated absolute paths to scan |
 | `HARMONIE_DATA_DIR` | platform user-data dir | Where to put `harmonie.db`. Defaults to `~/.local/share/harmonie` on Linux, `~/Library/Application Support/harmonie` on macOS. |
-| `HARMONIE_WORKERS` | CPU count | Analysis worker processes. Each worker peaks around 1 GB of RAM during extraction of long files (10+ minute classical recordings, etc.), so set this conservatively on RAM-constrained boxes. |
+| `HARMONIE_WORKERS` | CPU count | Analysis worker processes. Each worker can use about 1 GB of RAM. |
 | `HARMONIE_SCAN_INTERVAL_HOURS` | `24` | Periodic scan interval (`0` disables) |
 | `HARMONIE_SCAN_ON_STARTUP` | `true` | Run a scan immediately on boot |
 | `HARMONIE_HOST` | `0.0.0.0` | HTTP bind address |
@@ -83,10 +86,9 @@ All settings come from environment variables (or a `.env` file in the working di
 | `HARMONIE_CORS_ORIGINS` | (none) | Comma-separated list to enable CORS |
 | `HARMONIE_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
-
 ## Running as a service
 
-For long-lived deployments, run harmonie under systemd rather than in a shell or tmux. Systemd handles restarts, captures logs, and isn't tied to a login session.
+For long-lived Linux deployments, run Harmonie under systemd.
 
 Create `/etc/systemd/system/harmonie.service`:
 
