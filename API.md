@@ -488,7 +488,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | `seeds` | int\[\] | `[]` | Pre-resolved track IDs. |
 | `seed_weights` | float\[\] | `[]` | Optional positive weights aligned with `seeds`. Empty means weight 1 for every seed. Duplicate IDs have their weights summed. |
-| `seed_refs` | object\[\] | `[]` | Inline path/tag references. See [Inline seed references](#inline-seed-references). |
+| `seed_refs` | object\[\] | `[]` | Inline path/tag references, each with an optional positive `weight` (default `1`). See [Inline seed references](#inline-seed-references). |
 | `include_seeds` | bool | `false` | Include the seed track(s) in the result. |
 | `variation` | float | `0.0` | Bounded selection variation from `0.0` (deterministic) to `1.0` (maximum). Random picks remain within the service-controlled similarity band. |
 | `rng_seed` | int or null | `null` | Seed for reproducible variation. `null` uses fresh randomness. |
@@ -612,7 +612,7 @@ curl -X POST http://localhost:8842/api/v1/playlists \
 
 #### Inline seed references
 
-When the client only has paths or tags (not harmonie's IDs), send `seed_refs` instead of — or alongside — `seeds`. Each entry is the same shape as the [`/tracks/resolve`](#resolve-a-track) query: any subset of `{path, artist, album, title}`. Refs that don't resolve come back under `unresolved_seed_refs`:
+When the client only has paths or tags (not harmonie's IDs), send `seed_refs` instead of — or alongside — `seeds`. Each entry is the same shape as the [`/tracks/resolve`](#resolve-a-track) query — any subset of `{path, artist, album, title}` — plus an optional positive `weight` (default `1`). Refs that don't resolve come back under `unresolved_seed_refs`:
 
 ```json
 {
@@ -625,7 +625,7 @@ When the client only has paths or tags (not harmonie's IDs), send `seed_refs` in
 
 The playlist is built from whichever refs did resolve. The request fails with `400` only if every ref *and* every explicit `seeds` ID fail.
 
-`seeds` and `seed_refs` can be combined. The merged list keeps explicit-seed order first, then resolved-reference order. Duplicate IDs collapse to one seed and their weights are summed; every resolved reference contributes weight `1`.
+`seeds` and `seed_refs` can be combined. The merged list keeps explicit-seed order first, then resolved-reference order. Duplicate IDs collapse to one seed and their weights are summed; a resolved reference contributes its `weight` (default `1`).
 
 **Example**
 
@@ -636,7 +636,7 @@ curl -X POST http://localhost:8842/api/v1/playlists \
     "mode": "similar",
     "n": 20,
     "seed_refs": [
-      { "path": "/music/Album/01.flac" },
+      { "path": "/music/Album/01.flac", "weight": 4 },
       { "artist": "Aphex Twin", "album": "Selected Ambient Works", "title": "Xtal" }
     ]
   }'
