@@ -1,21 +1,24 @@
 name: release
 
-# Auto-tag and release on every push to main, with bump level derived
-# from the commit subject's Conventional Commits prefix:
+# Auto-tag and release on every push to main. The bump level is the
+# HIGHEST Conventional Commits level found among all pushed commits
+# (a docs commit on top of a feat must not swallow the release):
 #
 #   feat!: ... (or feat(scope)!:)  -> major  (1.2.3 -> 2.0.0)
 #   feat:  ... (or feat(scope):)   -> minor  (1.2.3 -> 1.3.0)
-#   docs:  ...                     -> skipped (no release)
-#   chore: ...                     -> skipped
-#   ci:    ...                     -> skipped
+#   docs:, chore:, ci:             -> no bump on their own
 #   fix:, refactor:, perf:, test:, style:, build:, anything else -> patch
 #
-# To ship a major release manually, tag it directly:
+# A push is skipped only when every commit in it is docs/chore/ci.
+#
+# To ship a release manually (e.g. a major, or a missed release), tag
+# and push; the tag-push run creates the GitHub release directly:
 #   git tag v2.0.0 && git push origin v2.0.0
 
 on:
   push:
     branches: [main]
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
 
 concurrency:
   group: release
@@ -34,26 +37,51 @@ jobs:
 
       - name: Decide bump
         id: decide
+        if: github.ref_type == 'branch'
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
         run: |
-          subject=$(git log -1 --pretty=%s)
-          echo "subject: $subject"
-          # Conventional prefix: type, optional (scope), optional !, then ":"
-          if echo "$subject" | grep -qE '^feat(\([^)]*\))?!:'; then
-            level=major
-          elif echo "$subject" | grep -qE '^feat(\([^)]*\))?:'; then
-            level=minor
-          elif echo "$subject" | grep -qE '^(docs|chore|ci)(\([^)]*\))?:'; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Skipping release for docs/chore/ci commit."
-            exit 0
+          set -euo pipefail
+          # Scan every commit in the push, not just the tip. On force
+          # pushes or history we don't have, fall back to the tip commit.
+          if [[ "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            subjects=$(git log -1 --pretty=%s "$AFTER")
           else
-            level=patch
+            subjects=$(git log --pretty=%s "$BEFORE..$AFTER")
+          fi
+
+          level=""
+          while IFS= read -r subject; do
+            [ -z "$subject" ] && continue
+            echo "subject: $subject"
+            # Conventional prefix: type, optional (scope), optional !, then ":"
+            if echo "$subject" | grep -qE '^feat(\([^)]*\))?!:'; then
+              commit_level=major
+            elif echo "$subject" | grep -qE '^feat(\([^)]*\))?:'; then
+              commit_level=minor
+            elif echo "$subject" | grep -qE '^(docs|chore|ci)(\([^)]*\))?:'; then
+              continue
+            else
+              commit_level=patch
+            fi
+            case "$commit_level" in
+              major) level=major ;;
+              minor) if [ "$level" != "major" ]; then level=minor; fi ;;
+              patch) if [ -z "$level" ]; then level=patch; fi ;;
+            esac
+          done <<< "$subjects"
+
+          if [ -z "$level" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping release: only docs/chore/ci commits in this push."
+            exit 0
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "level=$level" >> "$GITHUB_OUTPUT"
 
       - name: Compute next version
-        if: steps.decide.outputs.skip == 'false'
+        if: github.ref_type == 'branch' && steps.decide.outputs.skip == 'false'
         id: bump
         env:
           LEVEL: ${{ steps.decide.outputs.level }}
@@ -72,7 +100,7 @@ jobs:
           echo "Bumping ${latest} -> ${new} (level=${LEVEL})"
 
       - name: Push tag
-        if: steps.decide.outputs.skip == 'false'
+        if: github.ref_type == 'branch' && steps.decide.outputs.skip == 'false'
         env:
           NEW_TAG: ${{ steps.bump.outputs.new }}
         run: |
@@ -81,10 +109,12 @@ jobs:
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
 
+      # Runs for branch pushes that produced a tag (the bot's tag push
+      # doesn't retrigger workflows) and for manually pushed tags.
       - name: Create GitHub release
-        if: steps.decide.outputs.skip == 'false'
+        if: github.ref_type == 'tag' || steps.decide.outputs.skip == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.bump.outputs.new }}
-          name: ${{ steps.bump.outputs.new }}
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || steps.bump.outputs.new }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || steps.bump.outputs.new }}
           generate_release_notes: true
