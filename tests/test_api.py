@@ -363,11 +363,23 @@ class TestPlaylistDiscriminator:
         ids, weights = _merge_seeds(
             seeds=[42, 117, 42],
             seed_weights=[3.0, 2.0, 4.0],
-            resolved=[117, 9],
+            resolved=[(117, 1.0), (9, 1.0)],
         )
 
         assert ids == [42, 117, 9]
         assert weights == [7.0, 3.0, 1.0]
+
+    def test_resolved_ref_weights_merge_with_explicit_weights(self):
+        from harmonie.api.routes import _merge_seeds
+
+        ids, weights = _merge_seeds(
+            seeds=[42],
+            seed_weights=[3.0],
+            resolved=[(42, 2.5), (9, 8.0)],
+        )
+
+        assert ids == [42, 9]
+        assert weights == [5.5, 8.0]
 
     def test_similar_mode_required_seeds(self, client):
         c, db = client
@@ -584,6 +596,52 @@ class TestPlaylistSeedRefs:
         )
         assert r.status_code == 200, r.text
         assert r.json()["unresolved_seed_refs"] == []
+
+    def test_seed_ref_with_weight(self, client):
+        """A ref may carry its own positive weight; the request succeeds and
+        the ref resolves like an unweighted one."""
+        c, _ = client
+        r = c.post(
+            "/api/v1/playlists",
+            json={
+                "mode": "similar",
+                "n": 2,
+                "seed_refs": [{"path": "/lib/mid.flac", "weight": 4.5}],
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["unresolved_seed_refs"] == []
+
+    def test_seed_ref_weight_must_be_positive_and_finite(self, client):
+        c, _ = client
+        for bad in (0, -1, "inf", "nan"):
+            r = c.post(
+                "/api/v1/playlists",
+                json={
+                    "mode": "similar",
+                    "n": 2,
+                    "seed_refs": [{"path": "/lib/mid.flac", "weight": bad}],
+                },
+            )
+            assert r.status_code == 422, f"weight={bad}: {r.text}"
+
+    def test_resolver_carries_ref_weights(self, client):
+        """_resolve_seed_refs pairs each resolved id with the ref's weight,
+        defaulting to 1."""
+        from harmonie.api.routes import _resolve_seed_refs
+        from harmonie.api.schemas import SeedRef
+
+        _, db = client
+        resolved, unresolved = _resolve_seed_refs(
+            db,
+            [
+                SeedRef(path="/lib/mid.flac", weight=2.5),
+                SeedRef(path="/lib/slow.flac"),
+            ],
+        )
+
+        assert unresolved == []
+        assert [weight for _, weight in resolved] == [2.5, 1.0]
 
     def test_unresolved_seed_refs_reported(self, client):
         """A bad ref alongside a good one: the good one drives the playlist

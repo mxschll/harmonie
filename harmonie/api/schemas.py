@@ -156,6 +156,16 @@ class SeedRef(BaseModel):
     artist: str | None = None
     album: str | None = None
     title: str | None = None
+    weight: float = Field(
+        1.0,
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "Positive weight this ref contributes to the seed centroid once "
+            "resolved. Defaults to 1. Duplicate seeds have their weights "
+            "summed, matching ``seed_weights`` semantics."
+        ),
+    )
 
     @model_validator(mode="after")
     def _at_least_one_field(self) -> SeedRef:
@@ -269,7 +279,8 @@ class _SeededPlaylist(_PlaylistCommon):
         description=(
             "Optional positive weights aligned with ``seeds``. Empty means "
             "every explicit seed has weight 1. Duplicate seed IDs have their "
-            "weights summed. Resolved ``seed_refs`` always contribute weight 1."
+            "weights summed. Resolved ``seed_refs`` contribute their own "
+            "per-ref ``weight`` (default 1)."
         ),
     )
     seed_refs: list[SeedRef] = Field(

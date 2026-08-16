@@ -410,12 +410,13 @@ def list_styles(
 
 def _resolve_seed_refs(
     db: Database, refs: list[SeedRef]
-) -> tuple[list[int], list[UnresolvedSeedRef]]:
+) -> tuple[list[tuple[int, float]], list[UnresolvedSeedRef]]:
     """Resolve each ``SeedRef`` via :meth:`Database.find_track`. Returns
-    ``(resolved_ids, unresolved)``; refs that don't match are returned in
-    ``unresolved`` rather than raising.
+    ``(resolved, unresolved)`` where ``resolved`` pairs each track id with
+    the ref's weight; refs that don't match are returned in ``unresolved``
+    rather than raising.
     """
-    resolved: list[int] = []
+    resolved: list[tuple[int, float]] = []
     unresolved: list[UnresolvedSeedRef] = []
     for ref in refs:
         row = db.find_track(
@@ -427,12 +428,12 @@ def _resolve_seed_refs(
         if row is None:
             unresolved.append(UnresolvedSeedRef(ref=ref))
         else:
-            resolved.append(int(row["id"]))
+            resolved.append((int(row["id"]), ref.weight))
     return resolved, unresolved
 
 
 def _merge_seeds(
-    seeds: list[int], seed_weights: list[float], resolved: list[int]
+    seeds: list[int], seed_weights: list[float], resolved: list[tuple[int, float]]
 ) -> tuple[list[int], list[float]]:
     """Merge explicit and resolved seeds, summing duplicate weights."""
     out: list[int] = []
@@ -443,11 +444,11 @@ def _merge_seeds(
             out.append(sid)
             weights_by_id[sid] = 0.0
         weights_by_id[sid] += weight
-    for sid in resolved:
+    for sid, weight in resolved:
         if sid not in weights_by_id:
             out.append(sid)
             weights_by_id[sid] = 0.0
-        weights_by_id[sid] += 1.0
+        weights_by_id[sid] += weight
     return out, [weights_by_id[sid] for sid in out]
 
 
@@ -477,9 +478,9 @@ def make_playlist(
     # Vibe mode has no seeds; resolution is a no-op for it.
     unresolved: list[UnresolvedSeedRef] = []
     if isinstance(body, (SimilarPlaylist, DriftPlaylist)):
-        resolved_ids, unresolved = _resolve_seed_refs(db, body.seed_refs)
+        resolved_seeds, unresolved = _resolve_seed_refs(db, body.seed_refs)
         merged_seed_ids, merged_seed_weights = _merge_seeds(
-            body.seeds, body.seed_weights, resolved_ids
+            body.seeds, body.seed_weights, resolved_seeds
         )
         if not merged_seed_ids:
             raise HTTPException(
