@@ -24,6 +24,10 @@ from .tags import Tags, extract_tags
 
 logger = logging.getLogger("harmonie.workers")
 
+# How often a scan collecting results looks up to check whether it was
+# cancelled. Short enough that shutdown feels immediate.
+RESULT_POLL_SEC = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Job + result types (picklable)
@@ -187,6 +191,7 @@ class WorkerPool:
         *,
         workers: int,
         log_level: str = "INFO",
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self.workers = max(1, workers)
 
@@ -194,7 +199,7 @@ class WorkerPool:
         # extractor, so leaving this to them means one download per worker
         # against a host that does not enjoy the attention.
         logger.info("preparing analysis models (first run downloads about 20 MB)")
-        prefetch_models()
+        prefetch_models(should_stop)
 
         # 'spawn' avoids fork-after-thread issues with TensorFlow.
         ctx = mp.get_context("spawn")
@@ -210,11 +215,38 @@ class WorkerPool:
         )
         logger.info("started worker pool: %d workers", self.workers)
 
-    def map(self, jobs: list[FullJob | DescriptorJob], *, chunksize: int = 1):
+    def map(
+        self,
+        jobs: list[FullJob | DescriptorJob],
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ):
+        """Stream results as workers finish, one job per task.
+
+        There is deliberately no chunksize option: batching makes
+        ``imap_unordered`` return a plain generator with no ``next(timeout=...)``,
+        and the timeout is what lets a cancelled scan stop collecting.
+        """
         if self._pool is None:
             raise RuntimeError("pool is closed")
-        # imap_unordered yields results as they complete in any order.
-        yield from self._pool.imap_unordered(_dispatch, jobs, chunksize=chunksize)
+        # Submitting first and checking afterwards would queue the whole
+        # library into a pool the scan has already abandoned.
+        if should_stop is not None and should_stop():
+            return
+        pending = self._pool.imap_unordered(_dispatch, jobs, chunksize=1)
+        while True:
+            if self._pool is None or (should_stop is not None and should_stop()):
+                return
+            try:
+                # Poll instead of blocking. terminate() called from another
+                # thread does not make a blocked next() raise: it waits for a
+                # result no worker will ever send, so the scan would never
+                # notice the cancel and the process could not shut down.
+                yield pending.next(timeout=RESULT_POLL_SEC)
+            except mp.TimeoutError:
+                continue
+            except StopIteration:
+                return
 
     def close(self) -> None:
         if self._pool is None:
