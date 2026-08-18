@@ -24,6 +24,10 @@ from .tags import Tags, extract_tags
 
 logger = logging.getLogger("harmonie.workers")
 
+# How often a scan collecting results looks up to check whether it was
+# cancelled. Short enough that shutdown feels immediate.
+RESULT_POLL_SEC = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Job + result types (picklable)
@@ -210,11 +214,29 @@ class WorkerPool:
         )
         logger.info("started worker pool: %d workers", self.workers)
 
-    def map(self, jobs: list[FullJob | DescriptorJob], *, chunksize: int = 1):
+    def map(
+        self,
+        jobs: list[FullJob | DescriptorJob],
+        *,
+        chunksize: int = 1,
+        should_stop: Callable[[], bool] | None = None,
+    ):
         if self._pool is None:
             raise RuntimeError("pool is closed")
-        # imap_unordered yields results as they complete in any order.
-        yield from self._pool.imap_unordered(_dispatch, jobs, chunksize=chunksize)
+        pending = self._pool.imap_unordered(_dispatch, jobs, chunksize=chunksize)
+        while True:
+            if self._pool is None or (should_stop is not None and should_stop()):
+                return
+            try:
+                # Poll instead of blocking. terminate() called from another
+                # thread does not make a blocked next() raise: it waits for a
+                # result no worker will ever send, so the scan would never
+                # notice the cancel and the process could not shut down.
+                yield pending.next(timeout=RESULT_POLL_SEC)
+            except mp.TimeoutError:
+                continue
+            except StopIteration:
+                return
 
     def close(self) -> None:
         if self._pool is None:

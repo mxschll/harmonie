@@ -36,6 +36,9 @@ class _ScanCancelled(Exception):
 # String written to scans.last_error when a scan is cancelled by the user.
 _CANCELLED_REASON = "cancelled by user"
 
+# How long stop() waits for a cancelled scan to finish recording its outcome.
+SHUTDOWN_WAIT_SEC = 30
+
 
 # ---------------------------------------------------------------------------
 # Status types
@@ -152,13 +155,26 @@ class Analyzer:
             raise _ScanCancelled()
 
     def stop(self) -> None:
-        """Shutdown the analyzer. Cancels any in-flight scan, then closes
-        the pool and DB."""
+        """Shutdown the analyzer. Cancels any in-flight scan, waits for it to
+        unwind, then closes the pool and DB."""
         self.request_cancel()
-        if self.pool is not None:
-            self.pool.close()
-            self.pool = None
-        self.db.close()
+        # The cancelled scan still has to record its outcome. Closing the DB
+        # underneath it loses the scan-history row and raises "Cannot operate
+        # on a closed database", leaving the scan marked running forever.
+        acquired = self._scan_lock.acquire(timeout=SHUTDOWN_WAIT_SEC)
+        try:
+            if not acquired:
+                logger.warning(
+                    "scan still winding down after %ss; closing anyway",
+                    SHUTDOWN_WAIT_SEC,
+                )
+            if self.pool is not None:
+                self.pool.close()
+                self.pool = None
+            self.db.close()
+        finally:
+            if acquired:
+                self._scan_lock.release()
 
     # -- scan ----------------------------------------------------------
 
@@ -280,13 +296,15 @@ class Analyzer:
                 if self.pool is None:
                     self.start()
                 assert self.pool is not None
-                # Cancellation terminates the pool, which causes
-                # imap_unordered to raise. Any exception that surfaces
-                # while the cancel flag is set is the expected
-                # consequence; without the flag it propagates as a real
-                # error.
+                # Cancellation terminates the pool. The result loop below
+                # polls, so it notices the cancel and stops collecting
+                # instead of waiting for results that will never arrive.
                 try:
-                    for result in self.pool.map(all_jobs, chunksize=1):
+                    for result in self.pool.map(
+                        all_jobs,
+                        chunksize=1,
+                        should_stop=self._cancel_event.is_set,
+                    ):
                         if self._cancel_event.is_set():
                             break
                         self._handle_result(result, reachable_roots=reachable)
