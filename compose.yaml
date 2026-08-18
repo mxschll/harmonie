@@ -1,6 +1,7 @@
 services:
   harmonie:
-    image: ghcr.io/mxschll/harmonie:latest
+    # Override to test a locally built image: HARMONIE_IMAGE=harmonie:local
+    image: ${HARMONIE_IMAGE:-ghcr.io/mxschll/harmonie:latest}
     # Building locally instead of pulling: comment out `image` above and
     # uncomment this.
     # build: .
