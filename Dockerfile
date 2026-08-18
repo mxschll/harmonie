@@ -26,34 +26,21 @@ COPY . /src
 RUN pip install --pre .
 
 # Bake the Essentia models into the image so a container needs no network on
-# first run. The paths come from harmonie's own helpers, so they cannot drift
-# from what the analyzer looks for at runtime.
+# first run. prefetch_models() is harmonie's own fetch path, retries included,
+# so the build cannot drift from what the analyzer looks for at runtime.
 ENV XDG_CACHE_HOME=/opt/harmonie/cache \
     TQDM_DISABLE=1
 RUN <<'PY' python -
-import time
+from harmonie.features import prefetch_models
 
-from harmonie.features import (
-    ensure_effnet_model,
-    ensure_genre_head_model,
-    ensure_genre_labels,
-)
-
-# essentia.upf.edu drops connections mid-download often enough to break builds.
-# The helpers skip files that already exist and download through a .part file,
-# so a retry resumes rather than corrupting anything.
-for attempt in range(1, 6):
-    try:
-        print(ensure_effnet_model(), flush=True)
-        print(ensure_genre_head_model(), flush=True)
-        print(len(ensure_genre_labels()), "labels", flush=True)
-        break
-    except Exception as exc:
-        print(f"model fetch failed (attempt {attempt}): {exc}", flush=True)
-        if attempt == 5:
-            raise
-        time.sleep(5 * attempt)
+# False means the style classifier is missing: tracks would be analysed with no
+# genre data at all, so fail the build rather than ship that.
+if not prefetch_models():
+    raise SystemExit("model download failed")
 PY
+
+# The lock files are download coordination, not payload.
+RUN find /opt/harmonie/cache -name '*.lock' -delete
 
 # Fail the build rather than the first scan if the native stack is broken.
 RUN python -c "import essentia.standard, harmonie; print('essentia ok')"
