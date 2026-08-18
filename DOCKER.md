@@ -128,6 +128,56 @@ HARMONIE_SCAN_ON_STARTUP=false
 HARMONIE_SCAN_INTERVAL_HOURS=0
 ```
 
+## Switching from a native install
+
+Your existing database works in the container, but only if the library sits at
+the **same absolute path** inside it. Analysis results are keyed on the file's
+absolute path, size and mtime, so a library that moves from
+`/Users/you/Music` to `/music` looks like a completely new library: every track
+is analysed again, and the old rows are never cleaned up, because pruning only
+touches paths under the roots it just scanned.
+
+First stop the native harmonie, so the write-ahead log is folded into the
+database file, then copy it into the directory you mount at `/data`:
+
+```bash
+cp ~/.local/share/harmonie/harmonie.db ./harmonie-data/
+```
+
+On macOS the file lives in `~/Library/Application Support/harmonie/`.
+
+Then pick one of two options.
+
+**Keep the paths, mount the library where the database expects it.** Nothing to
+edit; scanning skips everything:
+
+```yaml
+services:
+  harmonie:
+    environment:
+      HARMONIE_LIBRARIES: /Users/you/Music
+    volumes:
+      - /Users/you/Music:/Users/you/Music:ro
+      - ./harmonie-data:/data
+```
+
+**Or move to `/music` and rewrite the stored paths once:**
+
+```bash
+sqlite3 ./harmonie-data/harmonie.db "
+  UPDATE tracks SET path = replace(path, '/Users/you/Music', '/music'),
+                    library_root = replace(library_root, '/Users/you/Music', '/music');"
+```
+
+Either way the first scan should report `full=0` with everything skipped. If it
+reports `full=<your whole library>` instead, the paths do not line up — stop the
+container and fix the mount before it analyses everything again.
+
+> [!IMPORTANT]
+> Bind-mounting a library preserves modification times; copying it does not.
+> `cp` without `-p` gives every file a new mtime, which also triggers a full
+> re-analysis.
+
 ## CPU, architecture, and GPUs
 
 The image is `linux/amd64` only, and needs a CPU with AVX.
