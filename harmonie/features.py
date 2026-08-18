@@ -30,11 +30,13 @@ import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import numpy as np
 
-StopCheck = Callable[[], bool] | None
+# Evaluated at runtime, so it must not use PEP 604 syntax: the package still
+# supports Python 3.9.
+StopCheck = Optional[Callable[[], bool]]
 
 logger = logging.getLogger("harmonie.features")
 
