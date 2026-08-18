@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -735,6 +735,68 @@ class Database:
             }
             for r in cur
         ]
+
+    def orphaned_library_roots(self, known_roots: Iterable[str]) -> list[str]:
+        """Library roots in the index that are not configured any more.
+
+        A non-empty result means the library may have been remounted somewhere
+        else — the common case being a move into a container. One indexed
+        DISTINCT read, so scans of an unchanged library pay almost nothing.
+        """
+        known = {str(r) for r in known_roots}
+        cur = self._conn.execute(
+            "SELECT DISTINCT library_root FROM tracks WHERE library_root IS NOT NULL"
+        )
+        return sorted(row[0] for row in cur if row[0] not in known)
+
+    def relocation_index(
+        self, roots: Iterable[str]
+    ) -> dict[str, tuple[int, int, float]]:
+        """Map ``relative_path`` to ``(id, size, mtime)`` for rows under ``roots``.
+
+        Relative paths that appear under more than one root are left out: with
+        no way to tell which file is which, re-pointing one could attach an
+        embedding to the wrong track.
+        """
+        roots = list(roots)
+        if not roots:
+            return {}
+        placeholders = ",".join("?" * len(roots))
+        cur = self._conn.execute(
+            "SELECT id, relative_path, size, mtime FROM tracks "
+            f"WHERE library_root IN ({placeholders}) AND relative_path IS NOT NULL",
+            [str(r) for r in roots],
+        )
+        index: dict[str, tuple[int, int, float]] = {}
+        ambiguous: set[str] = set()
+        for row in cur:
+            rel = row["relative_path"]
+            if rel in index:
+                ambiguous.add(rel)
+                continue
+            index[rel] = (int(row["id"]), int(row["size"]), float(row["mtime"]))
+        for rel in ambiguous:
+            del index[rel]
+        return index
+
+    def relocate_track(
+        self, track_id: int, *, path: str, library_root: str, relative_path: str
+    ) -> bool:
+        """Point an existing row at the same file under a new absolute path.
+
+        Returns False if another row already holds that path, in which case the
+        caller should treat the file as new.
+        """
+        try:
+            with self.transaction() as cur:
+                cur.execute(
+                    "UPDATE tracks SET path = ?, library_root = ?, relative_path = ? "
+                    "WHERE id = ?",
+                    (path, library_root, relative_path, track_id),
+                )
+                return cur.rowcount > 0
+        except sqlite3.IntegrityError:
+            return False
 
     def needs_embedding(self, path: str, size: int, mtime: float, model: str) -> bool:
         meta = self.get_track_by_path(path)

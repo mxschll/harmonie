@@ -278,12 +278,15 @@ def build_jobs(
     model_name: str,
     force: bool,
     on_progress: Callable[[int], None] | None = None,
+    relocate: Callable[[str, int, float], bool] | None = None,
 ) -> tuple[list[FullJob], list[DescriptorJob], int]:
     """Decide which files need a full analysis vs. a descriptor refresh.
 
     Returns ``(full_jobs, descriptor_jobs, skipped_count)``. Files that
     don't exist or can't be stat'd are silently dropped. ``on_progress``
-    is invoked with the running count after every file.
+    is invoked with the running count after every file. ``relocate``, when
+    given, is offered each file before the decision, so a library that moved
+    is matched to its existing rows instead of analysed from scratch.
     """
     full_jobs: list[FullJob] = []
     desc_jobs: list[DescriptorJob] = []
@@ -296,6 +299,8 @@ def build_jobs(
                 on_progress(i)
             continue
         path_str = str(f)
+        if relocate is not None:
+            relocate(path_str, size, mtime)
         if force or db.needs_embedding(path_str, size, mtime, model_name):
             full_jobs.append(FullJob(path=path_str, size=size, mtime=mtime))
         elif db.needs_descriptor_refresh(path_str, DESCRIPTOR_VERSION):

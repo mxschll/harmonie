@@ -89,6 +89,46 @@ class ScanStatus:
 # ---------------------------------------------------------------------------
 
 
+class _LibraryRelocator:
+    """Matches files to index rows left behind by a library that moved.
+
+    Analysis is keyed on absolute path, so a library remounted somewhere else
+    (a native install switching to a container, say) looks entirely new: every
+    track would be analysed again and the old rows would linger, since pruning
+    only touches paths under the roots it scanned. Library-relative path plus
+    size and mtime identifies the same file across the move.
+    """
+
+    def __init__(self, db, roots: list[Path], index: dict[str, tuple[int, int, float]]):
+        self._db = db
+        self._roots = roots
+        self._index = index
+        self.moved = 0
+
+    def __call__(self, path: str, size: int, mtime: float) -> bool:
+        # A dict lookup and some string work per file; no queries unless a
+        # candidate actually matches.
+        library_root, relative_path = split_library_path(path, self._roots)
+        if relative_path is None or library_root is None:
+            return False
+        candidate = self._index.get(relative_path)
+        if candidate is None:
+            return False
+        track_id, old_size, old_mtime = candidate
+        if old_size != int(size) or abs(old_mtime - float(mtime)) > 1.0:
+            return False
+        if not self._db.relocate_track(
+            track_id,
+            path=path,
+            library_root=library_root,
+            relative_path=relative_path,
+        ):
+            return False
+        del self._index[relative_path]
+        self.moved += 1
+        return True
+
+
 class Analyzer:
     """Owns the DB connection and worker pool for the service lifetime."""
 
@@ -301,13 +341,21 @@ class Analyzer:
                     )
                     classify_state["last"] = now
 
+            relocator = self._build_relocator(reachable)
             full_jobs, desc_jobs, skipped = build_jobs(
                 self.db,
                 files,
                 model_name=self.model_name,
                 force=force,
                 on_progress=_classify_progress,
+                relocate=relocator,
             )
+            if relocator is not None and relocator.moved:
+                logger.info(
+                    "re-pointed %d track(s) to their new location; no "
+                    "re-analysis needed",
+                    relocator.moved,
+                )
             self.status.skipped = skipped
             logger.info(
                 "jobs: full=%d, descriptors_only=%d, skipped=%d",
@@ -409,6 +457,27 @@ class Analyzer:
                 self.status.failed,
                 self.status.removed,
             )
+
+    def _build_relocator(self, roots: list[Path]) -> _LibraryRelocator | None:
+        """Return a relocator only when the index holds rows under a root that
+        is no longer configured. An unchanged library pays one indexed DISTINCT
+        query per scan and nothing per file."""
+        configured = [
+            str(Path(p).expanduser().resolve()) for p in self.settings.libraries
+        ]
+        orphaned = self.db.orphaned_library_roots(configured)
+        if not orphaned:
+            return None
+        index = self.db.relocation_index(orphaned)
+        if not index:
+            return None
+        logger.info(
+            "index holds %d track(s) under %s, which is not a configured "
+            "library; matching them by library-relative path",
+            len(index),
+            ", ".join(orphaned),
+        )
+        return _LibraryRelocator(self.db, roots, index)
 
     def _handle_result(self, result, *, reachable_roots: list[Path]) -> None:
         if isinstance(result, FullResult):
