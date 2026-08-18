@@ -92,6 +92,42 @@ MUSIC_DIR=/path/to/music docker compose run --rm harmonie scan
 
 Any CLI subcommand works the same way: `status`, `info`, `similar`, `scans`.
 
+## Running it as a service
+
+The container is a long-lived service, not a batch job. `harmonie serve` runs
+the HTTP API and its own scheduler: a scan on startup, then one every
+`HARMONIE_SCAN_INTERVAL_HOURS` (24 by default). Nothing external needs to
+trigger it — no cron, no separate worker container.
+
+The compose file sets `restart: unless-stopped`, `init: true` so signals reach
+harmonie and dead workers get reaped, and a 60-second stop grace period, since
+a scan in flight can take longer than Docker's default 10 seconds to wind down.
+A hard kill is safe anyway: SQLite is crash-safe and unfinished tracks are
+simply analysed again next time.
+
+Docker's own health check calls `/health` every 30 seconds, so `docker ps` and
+orchestrators can see whether the service is actually answering.
+
+> [!IMPORTANT]
+> **Analysis workers stay resident between scans.** The pool is built at the
+> first scan and kept, so each worker holds TensorFlow and the models in memory
+> for the life of the container — an idle container with two workers measured
+> 1.2 GB. The default is one worker per core, so on a 12-core host you are
+> holding that many copies permanently. Set `HARMONIE_WORKERS` to something
+> your host can afford, especially on a machine that mostly serves:
+>
+> ```
+> HARMONIE_WORKERS=2
+> ```
+
+For a host that should never analyse anything, disable scanning entirely and
+the pool is never built:
+
+```
+HARMONIE_SCAN_ON_STARTUP=false
+HARMONIE_SCAN_INTERVAL_HOURS=0
+```
+
 ## CPU, architecture, and GPUs
 
 The image is `linux/amd64` only, and needs a CPU with AVX.

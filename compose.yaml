@@ -11,6 +11,13 @@ services:
     platform: linux/amd64
     container_name: harmonie
     restart: unless-stopped
+    # tini as PID 1: forwards signals to harmonie and reaps analysis workers
+    # that exit unexpectedly, so a long-running container collects no zombies.
+    init: true
+    # A scan in flight can take longer than Docker's default 10s to wind down.
+    # Killing it is safe (SQLite is crash-safe, unfinished tracks are redone)
+    # but a clean stop is nicer.
+    stop_grace_period: 60s
     ports:
       - "8842:8842"
     volumes:
