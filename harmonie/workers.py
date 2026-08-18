@@ -17,6 +17,7 @@ from .features import (
     EffnetExtractor,
     TrackFeatures,
     file_signature,
+    prefetch_models,
     top_styles,
 )
 from .tags import Tags, extract_tags
@@ -188,8 +189,20 @@ class WorkerPool:
         log_level: str = "INFO",
     ) -> None:
         self.workers = max(1, workers)
+
+        # Fetch the models here, in the parent. Each worker builds its own
+        # extractor, so leaving this to them means one download per worker
+        # against a host that does not enjoy the attention.
+        logger.info("preparing analysis models (first run downloads about 20 MB)")
+        prefetch_models()
+
         # 'spawn' avoids fork-after-thread issues with TensorFlow.
         ctx = mp.get_context("spawn")
+        logger.info(
+            "starting %d worker(s); each loads the models into memory, "
+            "which takes a moment",
+            self.workers,
+        )
         self._pool: mp.pool.Pool | None = ctx.Pool(
             processes=self.workers,
             initializer=_worker_init,
