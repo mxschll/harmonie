@@ -24,6 +24,19 @@ Results are stored in SQLite and exposed through an HTTP API for similarity sear
 
 ## Install
 
+Docker is the shortest path:
+
+```bash
+MUSIC_DIR=/path/to/music docker compose up -d
+```
+
+That serves on port 8842 and scans immediately. The image bundles the Essentia
+models, and because the library is always mounted at `/music`, a scanned
+database can be moved to another host — scan on a fast machine, serve on a slow
+one. See [DOCKER.md](DOCKER.md) for that workflow and the CPU requirements.
+
+### With pipx
+
 [pipx][pipx] installs Harmonie in an isolated environment and adds the `harmonie` command to your `PATH`. The `--pre` flag is required because `essentia-tensorflow` is published as a development release.
 
 If your system Python is 3.9–3.12:

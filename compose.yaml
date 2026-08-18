@@ -1,0 +1,29 @@
+services:
+  harmonie:
+    image: ghcr.io/mxschll/harmonie:latest
+    # Building locally instead of pulling: comment out `image` above and
+    # uncomment this.
+    # build: .
+    #
+    # essentia-tensorflow is x86-64 only. Naming the platform makes the
+    # failure explicit on an arm64 host instead of a confusing pull error.
+    platform: linux/amd64
+    container_name: harmonie
+    restart: unless-stopped
+    ports:
+      - "8842:8842"
+    volumes:
+      # The database and runtime state. Copy this directory to move a scanned
+      # library to another host — see DOCKER.md.
+      - ./harmonie-data:/data
+      # Your library. Always mounted at /music: the paths stored in the
+      # database are container paths, which is what makes it portable.
+      - ${MUSIC_DIR:?set MUSIC_DIR to your music directory}:/music:ro
+    environment:
+      # Analysis workers. Unset or 0 uses every core.
+      HARMONIE_WORKERS: ${HARMONIE_WORKERS:-0}
+      # Rescan cadence. Set both to 0/false on a host that should only serve.
+      HARMONIE_SCAN_INTERVAL_HOURS: ${HARMONIE_SCAN_INTERVAL_HOURS:-24}
+      HARMONIE_SCAN_ON_STARTUP: ${HARMONIE_SCAN_ON_STARTUP:-true}
+      # Optional: require this key on every request except /health.
+      HARMONIE_API_KEY: ${HARMONIE_API_KEY:-}
