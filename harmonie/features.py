@@ -19,9 +19,15 @@ Two extraction modes:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
+import sys
+import threading
+import time
 import urllib.request
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -126,6 +132,16 @@ class TrackFeatures:
 # Model cache
 # ---------------------------------------------------------------------------
 
+# The model host drops connections and times out often enough that a single
+# attempt is not good enough: a failed style-classifier fetch silently costs a
+# whole scan its genre data.
+DOWNLOAD_TIMEOUT_SEC = 60
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_RETRY_SLEEP_SEC = 3
+
+# flock guards across processes; this guards threads inside one process.
+_THREAD_LOCK = threading.Lock()
+
 
 def _model_cache_dir() -> Path:
     try:
@@ -140,15 +156,25 @@ def _model_cache_dir() -> Path:
 
 
 def _download(url: str, dest: Path) -> None:
-    tmp = dest.with_suffix(dest.suffix + ".part")
+    # A unique temp name per caller. Every worker process used to write the
+    # same ``.part`` file and rename it into place, so the first rename won
+    # and the rest crashed with FileNotFoundError.
+    tmp = dest.with_name(f"{dest.name}.part.{os.getpid()}.{uuid.uuid4().hex[:8]}")
     logger.info("downloading: %s", url)
     try:
-        with urllib.request.urlopen(url) as resp:
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SEC) as resp:
             total = int(resp.headers.get("Content-Length", 0)) or None
             try:
                 from tqdm import tqdm
 
-                bar_ctx = tqdm(total=total, unit="B", unit_scale=True, desc=dest.name)
+                # A progress bar is noise in a log file or `docker logs`.
+                bar_ctx = tqdm(
+                    total=total,
+                    unit="B",
+                    unit_scale=True,
+                    desc=dest.name,
+                    disable=not sys.stderr.isatty(),
+                )
             except Exception:
                 bar_ctx = None
             with open(tmp, "wb") as f:
@@ -162,34 +188,103 @@ def _download(url: str, dest: Path) -> None:
             if bar_ctx is not None:
                 bar_ctx.close()
     except Exception:
-        if tmp.exists():
+        with contextlib.suppress(OSError):
             tmp.unlink()
         raise
-    tmp.rename(dest)
+    # Atomic, and tolerant of another process having finished first.
+    os.replace(tmp, dest)
+
+
+@contextlib.contextmanager
+def _download_lock(dest: Path):
+    """Serialize downloads of ``dest`` across processes and threads.
+
+    Twelve analysis workers starting at once used to mean twelve concurrent
+    downloads of the same file, which wasted bandwidth and made a flaky model
+    host time out. One downloads; the rest wait and find the file cached.
+    """
+    with _THREAD_LOCK:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - Windows has no fcntl
+            yield
+            return
+
+        with open(dest.with_name(dest.name + ".lock"), "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _ensure_cached(url: str, filename: str) -> Path:
+    """Return the cached path for ``url``, downloading it once if needed."""
+    dest = _model_cache_dir() / filename
+    if dest.exists():
+        return dest
+
+    with _download_lock(dest):
+        # Another process may have finished while we waited for the lock.
+        if dest.exists():
+            return dest
+
+        last_error: Exception | None = None
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            try:
+                _download(url, dest)
+                return dest
+            except Exception as exc:  # noqa: BLE001 - retried below, then raised
+                last_error = exc
+                logger.warning(
+                    "download failed (attempt %d/%d): %s",
+                    attempt,
+                    DOWNLOAD_ATTEMPTS,
+                    exc,
+                )
+                if attempt < DOWNLOAD_ATTEMPTS:
+                    time.sleep(DOWNLOAD_RETRY_SLEEP_SEC * attempt)
+
+        assert last_error is not None
+        raise last_error
 
 
 def ensure_effnet_model() -> Path:
-    path = _model_cache_dir() / EFFNET_MODEL_FILENAME
-    if not path.exists():
-        _download(EFFNET_MODEL_URL, path)
-    return path
+    return _ensure_cached(EFFNET_MODEL_URL, EFFNET_MODEL_FILENAME)
 
 
 def ensure_genre_head_model() -> Path:
     """Download (once) the 400-style classifier head that runs on top of the
     Effnet embeddings."""
-    path = _model_cache_dir() / GENRE_HEAD_MODEL_FILENAME
-    if not path.exists():
-        _download(GENRE_HEAD_MODEL_URL, path)
-    return path
+    return _ensure_cached(GENRE_HEAD_MODEL_URL, GENRE_HEAD_MODEL_FILENAME)
+
+
+def prefetch_models() -> bool:
+    """Fetch every model before the worker pool starts.
+
+    Workers each construct their own extractor, so without this the download
+    happens once per worker. Returns False when the style classifier could not
+    be fetched, meaning tracks analysed now will carry no style data.
+    """
+    ensure_effnet_model()
+    try:
+        ensure_genre_head_model()
+        ensure_genre_labels()
+    except Exception as exc:  # noqa: BLE001 - degraded run is still useful
+        logger.error(
+            "style classifier unavailable (%s). Tracks analysed now get an "
+            "embedding but no genres or styles; re-run `harmonie scan --force` "
+            "once it can be downloaded.",
+            exc,
+        )
+        return False
+    return True
 
 
 def ensure_genre_labels() -> list[str]:
     """Return the 400 ``"Genre---Style"`` labels in the order produced by the
     classifier head. Cached on disk alongside the model."""
-    path = _model_cache_dir() / GENRE_HEAD_LABELS_FILENAME
-    if not path.exists():
-        _download(GENRE_HEAD_LABELS_URL, path)
+    path = _ensure_cached(GENRE_HEAD_LABELS_URL, GENRE_HEAD_LABELS_FILENAME)
     with open(path) as f:
         meta = json.load(f)
     classes = meta.get("classes")
