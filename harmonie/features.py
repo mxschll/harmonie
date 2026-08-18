@@ -30,9 +30,11 @@ import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
+
+StopCheck = Callable[[], bool] | None
 
 logger = logging.getLogger("harmonie.features")
 
@@ -155,7 +157,12 @@ def _model_cache_dir() -> Path:
     return p
 
 
-def _download(url: str, dest: Path) -> None:
+class DownloadCancelled(Exception):
+    """Raised when a model download is abandoned because the caller is
+    shutting down."""
+
+
+def _download(url: str, dest: Path, should_stop: StopCheck = None) -> None:
     # A unique temp name per caller. Every worker process used to write the
     # same ``.part`` file and rename it into place, so the first rename won
     # and the rest crashed with FileNotFoundError.
@@ -179,6 +186,8 @@ def _download(url: str, dest: Path) -> None:
                 bar_ctx = None
             with open(tmp, "wb") as f:
                 while True:
+                    if should_stop is not None and should_stop():
+                        raise DownloadCancelled(url)
                     chunk = resp.read(1 << 16)
                     if not chunk:
                         break
@@ -218,7 +227,7 @@ def _download_lock(dest: Path):
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def _ensure_cached(url: str, filename: str) -> Path:
+def _ensure_cached(url: str, filename: str, should_stop: StopCheck = None) -> Path:
     """Return the cached path for ``url``, downloading it once if needed."""
     dest = _model_cache_dir() / filename
     if dest.exists():
@@ -232,8 +241,10 @@ def _ensure_cached(url: str, filename: str) -> Path:
         last_error: Exception | None = None
         for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
             try:
-                _download(url, dest)
+                _download(url, dest, should_stop)
                 return dest
+            except DownloadCancelled:
+                raise
             except Exception as exc:  # noqa: BLE001 - retried below, then raised
                 last_error = exc
                 logger.warning(
@@ -249,27 +260,30 @@ def _ensure_cached(url: str, filename: str) -> Path:
         raise last_error
 
 
-def ensure_effnet_model() -> Path:
-    return _ensure_cached(EFFNET_MODEL_URL, EFFNET_MODEL_FILENAME)
+def ensure_effnet_model(should_stop: StopCheck = None) -> Path:
+    return _ensure_cached(EFFNET_MODEL_URL, EFFNET_MODEL_FILENAME, should_stop)
 
 
-def ensure_genre_head_model() -> Path:
+def ensure_genre_head_model(should_stop: StopCheck = None) -> Path:
     """Download (once) the 400-style classifier head that runs on top of the
     Effnet embeddings."""
-    return _ensure_cached(GENRE_HEAD_MODEL_URL, GENRE_HEAD_MODEL_FILENAME)
+    return _ensure_cached(GENRE_HEAD_MODEL_URL, GENRE_HEAD_MODEL_FILENAME, should_stop)
 
 
-def prefetch_models() -> bool:
+def prefetch_models(should_stop: StopCheck = None) -> bool:
     """Fetch every model before the worker pool starts.
 
     Workers each construct their own extractor, so without this the download
     happens once per worker. Returns False when the style classifier could not
-    be fetched, meaning tracks analysed now will carry no style data.
+    be fetched, meaning tracks analysed now will carry no style data. Raises
+    :class:`DownloadCancelled` if ``should_stop`` turns true mid-download.
     """
-    ensure_effnet_model()
+    ensure_effnet_model(should_stop)
     try:
-        ensure_genre_head_model()
-        ensure_genre_labels()
+        ensure_genre_head_model(should_stop)
+        ensure_genre_labels(should_stop)
+    except DownloadCancelled:
+        raise
     except Exception as exc:  # noqa: BLE001 - degraded run is still useful
         logger.error(
             "style classifier unavailable (%s). Tracks analysed now get an "
@@ -281,10 +295,12 @@ def prefetch_models() -> bool:
     return True
 
 
-def ensure_genre_labels() -> list[str]:
+def ensure_genre_labels(should_stop: StopCheck = None) -> list[str]:
     """Return the 400 ``"Genre---Style"`` labels in the order produced by the
     classifier head. Cached on disk alongside the model."""
-    path = _ensure_cached(GENRE_HEAD_LABELS_URL, GENRE_HEAD_LABELS_FILENAME)
+    path = _ensure_cached(
+        GENRE_HEAD_LABELS_URL, GENRE_HEAD_LABELS_FILENAME, should_stop
+    )
     with open(path) as f:
         meta = json.load(f)
     classes = meta.get("classes")

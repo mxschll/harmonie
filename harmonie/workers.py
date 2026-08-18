@@ -191,6 +191,7 @@ class WorkerPool:
         *,
         workers: int,
         log_level: str = "INFO",
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         self.workers = max(1, workers)
 
@@ -198,7 +199,7 @@ class WorkerPool:
         # extractor, so leaving this to them means one download per worker
         # against a host that does not enjoy the attention.
         logger.info("preparing analysis models (first run downloads about 20 MB)")
-        prefetch_models()
+        prefetch_models(should_stop)
 
         # 'spawn' avoids fork-after-thread issues with TensorFlow.
         ctx = mp.get_context("spawn")
@@ -218,12 +219,21 @@ class WorkerPool:
         self,
         jobs: list[FullJob | DescriptorJob],
         *,
-        chunksize: int = 1,
         should_stop: Callable[[], bool] | None = None,
     ):
+        """Stream results as workers finish, one job per task.
+
+        There is deliberately no chunksize option: batching makes
+        ``imap_unordered`` return a plain generator with no ``next(timeout=...)``,
+        and the timeout is what lets a cancelled scan stop collecting.
+        """
         if self._pool is None:
             raise RuntimeError("pool is closed")
-        pending = self._pool.imap_unordered(_dispatch, jobs, chunksize=chunksize)
+        # Submitting first and checking afterwards would queue the whole
+        # library into a pool the scan has already abandoned.
+        if should_stop is not None and should_stop():
+            return
+        pending = self._pool.imap_unordered(_dispatch, jobs, chunksize=1)
         while True:
             if self._pool is None or (should_stop is not None and should_stop()):
                 return

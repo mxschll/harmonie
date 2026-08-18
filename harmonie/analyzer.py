@@ -13,7 +13,7 @@ from pathlib import Path
 from . import __version__
 from .config import Settings
 from .db import Database
-from .features import DESCRIPTOR_VERSION, EMBEDDING_DIM, MODEL_NAME
+from .features import DESCRIPTOR_VERSION, EMBEDDING_DIM, MODEL_NAME, DownloadCancelled
 from .index import EmbeddingIndex
 from .scan import iter_audio_files, split_library_path
 from .workers import (
@@ -119,26 +119,40 @@ class Analyzer:
     # -- lifecycle -----------------------------------------------------
 
     def start(self) -> None:
-        if self.pool is None:
-            self.pool = WorkerPool(
+        if self.pool is not None:
+            return
+        try:
+            pool = WorkerPool(
                 workers=self.settings.worker_count,
                 log_level=self.settings.log_level,
+                should_stop=self._cancel_event.is_set,
             )
+        except DownloadCancelled as exc:
+            # Cancelled while fetching models on a first run.
+            raise _ScanCancelled() from exc
+        # Building the pool spawns processes, which takes long enough for a
+        # cancel to land in the middle. request_cancel() saw no pool to
+        # terminate, so hand back nothing rather than a pool the scan is about
+        # to abandon with the whole library queued in it.
+        if self._cancel_event.is_set():
+            with contextlib.suppress(Exception):
+                pool.terminate()
+            raise _ScanCancelled()
+        self.pool = pool
 
     def request_cancel(self) -> bool:
         """Ask the running scan to wind down. The result loop breaks out
         on the next iteration and the pool is terminated so workers stuck
         on slow I/O (CIFS, NFS) abort instead of waiting.
 
-        Returns True if a scan was active, False if no-op. Idempotent —
-        repeated calls during the same scan are silent no-ops.
+        Returns True if a scan was active, False if no-op. Repeated calls are
+        safe, and each one tears down whatever pool exists now — a pool built
+        after an earlier request still has to go.
         """
         if self.status.state != "scanning":
             return False
-        if self._cancel_event.is_set():
-            # Already requested. Don't log or re-terminate.
-            return True
-        logger.warning("scan cancellation requested")
+        if not self._cancel_event.is_set():
+            logger.warning("scan cancellation requested")
         self._cancel_event.set()
         if self.pool is not None:
             with contextlib.suppress(Exception):
@@ -155,23 +169,37 @@ class Analyzer:
             raise _ScanCancelled()
 
     def stop(self) -> None:
-        """Shutdown the analyzer. Cancels any in-flight scan, waits for it to
-        unwind, then closes the pool and DB."""
-        self.request_cancel()
-        # The cancelled scan still has to record its outcome. Closing the DB
+        """Shutdown the analyzer: cancel any in-flight scan, wait for it to
+        record its outcome, then release the pool and DB.
+
+        The wait is bounded, but that bounds this call only, not process exit: a
+        scan blocked in an OS filesystem call cannot be interrupted, and the
+        thread running it keeps the interpreter alive. When the wait runs out
+        the DB is left open, because the scan still owns it.
+        """
+        cancelled = self.request_cancel()
+        # A cancelled scan still has to record its outcome. Closing the DB
         # underneath it loses the scan-history row and raises "Cannot operate
         # on a closed database", leaving the scan marked running forever.
         acquired = self._scan_lock.acquire(timeout=SHUTDOWN_WAIT_SEC)
         try:
-            if not acquired:
+            pool, self.pool = self.pool, None
+            if pool is not None:
+                # A cancelled or abandoned scan must not drain its queue:
+                # close() waits for every job already submitted.
+                if cancelled or not acquired:
+                    with contextlib.suppress(Exception):
+                        pool.terminate()
+                else:
+                    pool.close()
+            if acquired:
+                self.db.close()
+            else:
                 logger.warning(
-                    "scan still winding down after %ss; closing anyway",
+                    "scan still running after %ss; leaving the database open "
+                    "so it can finish writing",
                     SHUTDOWN_WAIT_SEC,
                 )
-            if self.pool is not None:
-                self.pool.close()
-                self.pool = None
-            self.db.close()
         finally:
             if acquired:
                 self._scan_lock.release()
@@ -302,7 +330,6 @@ class Analyzer:
                 try:
                     for result in self.pool.map(
                         all_jobs,
-                        chunksize=1,
                         should_stop=self._cancel_event.is_set,
                     ):
                         if self._cancel_event.is_set():
@@ -327,6 +354,10 @@ class Analyzer:
                 self.status.removed = removed
                 if removed:
                     logger.info("pruned %d removed track(s)", removed)
+
+            # A cancel accepted while pruning ran would otherwise be recorded
+            # as a completed scan.
+            self._check_cancel()
         except _ScanCancelled:
             scan_state = "cancelled"
             scan_last_error = _CANCELLED_REASON

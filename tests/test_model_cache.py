@@ -132,6 +132,53 @@ def test_prefetch_reports_a_missing_style_classifier(cache_dir: Path, monkeypatc
     assert (cache_dir / features.EFFNET_MODEL_FILENAME).exists()
 
 
+def test_download_aborts_when_the_caller_is_shutting_down(cache_dir: Path, monkeypatch):
+    """Cancelling a first run must not wait for 20 MB to arrive."""
+    chunks_read = {"n": 0}
+
+    class _SlowResponse(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__(b"x" * (1 << 20))
+            self.headers = {"Content-Length": str(1 << 20)}
+
+        def read(self, n=-1):
+            chunks_read["n"] += 1
+            return super().read(n)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.close()
+            return False
+
+    monkeypatch.setattr(
+        features.urllib.request, "urlopen", lambda url, timeout=None: _SlowResponse()
+    )
+
+    with pytest.raises(features.DownloadCancelled):
+        features.ensure_effnet_model(should_stop=lambda: True)
+
+    assert chunks_read["n"] == 0, "should stop before reading, not after"
+    assert not (cache_dir / features.EFFNET_MODEL_FILENAME).exists()
+    # No partial file left looking like a cached model.
+    assert [p.name for p in cache_dir.iterdir()] == [
+        features.EFFNET_MODEL_FILENAME + ".lock"
+    ]
+
+
+def test_prefetch_propagates_cancellation(cache_dir: Path, monkeypatch):
+    """A cancel is not a missing style classifier; it must not be swallowed."""
+    monkeypatch.setattr(
+        features.urllib.request,
+        "urlopen",
+        lambda url, timeout=None: _FakeResponse(b"data"),
+    )
+
+    with pytest.raises(features.DownloadCancelled):
+        features.prefetch_models(should_stop=lambda: True)
+
+
 def test_prefetch_returns_true_when_everything_is_cached(cache_dir: Path, monkeypatch):
     labels = {
         "classes": [f"Genre---Style{i}" for i in range(features.GENRE_NUM_CLASSES)]

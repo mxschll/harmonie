@@ -160,8 +160,12 @@ def test_stop_waits_for_an_unwinding_scan_before_closing_the_db(
     assert db_usable_at_end["ok"] is True, "DB was closed under the scan thread"
 
 
-def test_stop_gives_up_waiting_after_the_timeout(analyzer: Analyzer, monkeypatch):
-    """A scan that will not unwind must not block shutdown forever."""
+def test_stop_returns_but_leaves_the_db_to_a_wedged_scan(
+    analyzer: Analyzer, monkeypatch
+):
+    """A scan blocked in an OS call cannot be interrupted, so stop() bounds
+    only itself: it returns, and leaves the DB open because the scan still owns
+    it. The process stays alive until that thread unblocks."""
     monkeypatch.setattr("harmonie.analyzer.SHUTDOWN_WAIT_SEC", 1)
     in_scan = threading.Event()
     wedged = threading.Event()
@@ -171,7 +175,8 @@ def test_stop_gives_up_waiting_after_the_timeout(analyzer: Analyzer, monkeypatch
         wedged.wait(timeout=30)
 
     monkeypatch.setattr(analyzer, "_run_scan", fake_run_scan)
-    threading.Thread(target=analyzer.scan, daemon=True).start()
+    scan_thread = threading.Thread(target=analyzer.scan, daemon=True)
+    scan_thread.start()
     assert in_scan.wait(timeout=5)
 
     started = time.monotonic()
@@ -179,7 +184,12 @@ def test_stop_gives_up_waiting_after_the_timeout(analyzer: Analyzer, monkeypatch
     elapsed = time.monotonic() - started
 
     assert 1 <= elapsed < 10, f"stop() waited {elapsed:.1f}s"
+    # The wedged scan keeps running, so its DB must still work.
+    analyzer.db.stats()
+    assert scan_thread.is_alive()
+
     wedged.set()
+    scan_thread.join(timeout=10)
 
 
 def test_stop_closes_when_no_scan_is_running(analyzer: Analyzer):

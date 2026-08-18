@@ -41,7 +41,7 @@ def harness(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(analyzer_mod, "build_jobs", fake_build_jobs)
 
     class FakePool:
-        def map(self, jobs, *, chunksize=1, should_stop=None):
+        def map(self, jobs, *, should_stop=None):
             observations.append(("pool.map", analyzer.status.phase))
             return iter([])
 
@@ -233,7 +233,7 @@ def test_scan_records_each_failure(tmp_path, monkeypatch):
         monkeypatch.setattr(analyzer_mod, "build_jobs", two_jobs)
 
         class FailingPool:
-            def map(self, jobs, *, chunksize=1, should_stop=None):
+            def map(self, jobs, *, should_stop=None):
                 for j in jobs:
                     yield JobError(path=j.path, error="not real audio")
 
@@ -366,7 +366,7 @@ class TestCancel:
             def __init__(self):
                 self.terminated = False
 
-            def map(self, jobs, *, chunksize=1, should_stop=None):
+            def map(self, jobs, *, should_stop=None):
                 for j in jobs:
                     if self.terminated:
                         return
