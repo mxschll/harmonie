@@ -27,11 +27,17 @@ Results are stored in SQLite and exposed through an HTTP API for similarity sear
 Docker is the shortest path:
 
 ```bash
-MUSIC_DIR=/path/to/music docker compose up -d
+docker run -d --name harmonie --init --restart unless-stopped \
+  -p 127.0.0.1:8842:8842 \
+  -v ./harmonie-data:/data \
+  -v /path/to/music:/music:ro \
+  ghcr.io/mxschll/harmonie:latest
 ```
 
 That serves on port 8842 and scans immediately. The image bundles the Essentia
-models. See [DOCKER.md](DOCKER.md) for the CPU requirements.
+models. Publish on `0.0.0.0:8842` instead to reach it from another machine, such
+as a Jellyfin host on the LAN. See [DOCKER.md](DOCKER.md) for compose and the CPU
+requirements.
 
 ### With pipx
 

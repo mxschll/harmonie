@@ -6,21 +6,19 @@
 ## Run it
 
 ```bash
-MUSIC_DIR=/path/to/music docker compose up -d
-```
-
-Harmonie listens on port 8842 and starts its first scan immediately. Follow it
-with `docker compose logs -f`, or from the Jellyfin plugin's settings page.
-
-With plain Docker:
-
-```bash
-docker run -d --name harmonie \
-  -p 8842:8842 \
+docker run -d --name harmonie --init --restart unless-stopped \
+  -p 127.0.0.1:8842:8842 \
   -v ./harmonie-data:/data \
   -v /path/to/music:/music:ro \
   ghcr.io/mxschll/harmonie:latest
 ```
+
+Harmonie listens on port 8842 and starts its first scan immediately. Follow it
+with `docker logs -f harmonie`, or from the Jellyfin plugin's settings page.
+
+The port is published on `127.0.0.1` because the API takes no credentials unless
+`HARMONIE_API_KEY` is set. Use `-p 0.0.0.0:8842:8842` to reach it from another
+machine, such as a Jellyfin host on the LAN.
 
 Both paths are fixed inside the container:
 
@@ -29,16 +27,15 @@ Both paths are fixed inside the container:
 | `/music` | Your library, mounted read-only. Mount several under `/music/...` if you have more than one. |
 | `/data` | `harmonie.db` and runtime state. This is the directory you back up or move. |
 
-`MUSIC_DIR` is the host directory compose mounts at `/music`. The container's
-`HARMONIE_LIBRARIES` is already `/music` and is not read from `.env`.
+With the `compose.yaml` from this repository:
 
-Compose publishes the port on `127.0.0.1` only, because the API takes no
-credentials unless `HARMONIE_API_KEY` is set. To reach it from another machine,
-such as a Jellyfin host on the LAN:
+```bash
+MUSIC_DIR=/path/to/music docker compose up -d
+```
 
-```
-BIND_ADDRESS=0.0.0.0
-```
+`MUSIC_DIR` is the host directory compose mounts at `/music`; the container's
+`HARMONIE_LIBRARIES` is already `/music` and is not read from `.env`. Compose
+publishes on `127.0.0.1` as well, and `BIND_ADDRESS=0.0.0.0` opens it up.
 
 Compose forwards `HARMONIE_WORKERS`, `HARMONIE_SCAN_INTERVAL_HOURS`,
 `HARMONIE_SCAN_ON_STARTUP`, `HARMONIE_API_KEY`, `HARMONIE_CORS_ORIGINS` and
@@ -51,9 +48,13 @@ yourself.
 One pass, then exit:
 
 ```bash
-MUSIC_DIR=/path/to/music docker compose run --rm harmonie scan
+docker run --rm \
+  -v ./harmonie-data:/data \
+  -v /path/to/music:/music:ro \
+  ghcr.io/mxschll/harmonie:latest scan
 ```
 
+With compose: `MUSIC_DIR=/path/to/music docker compose run --rm harmonie scan`.
 Any CLI subcommand works the same way: `status`, `info`, `similar`, `scans`.
 
 ## Running it as a service
@@ -62,10 +63,11 @@ The container serves the HTTP API and scans on its own: once at startup, then
 every `HARMONIE_SCAN_INTERVAL_HOURS` (24 by default). A health check calls
 `/health` every 30 seconds.
 
-The compose file sets `restart: unless-stopped`, `init: true` so signals reach
-harmonie and exited workers are reaped, and `stop_grace_period: 60s` because a
-scan in flight can take longer to wind down than Docker's default 10 seconds.
-Killing it mid-scan is safe: unfinished tracks are analysed on the next run.
+`--init` reaps exited workers and lets signals reach harmonie; `--restart
+unless-stopped` brings it back after a reboot. A scan in flight can take longer
+to wind down than Docker's default 10 seconds, so stop it with `docker stop -t 60
+harmonie`; the compose file sets that as `stop_grace_period`. Killing it mid-scan
+is safe: unfinished tracks are analysed on the next run.
 
 > [!IMPORTANT]
 > **Analysis workers stay resident between scans.** The pool is built at the
