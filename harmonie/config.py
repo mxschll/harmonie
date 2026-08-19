@@ -32,6 +32,57 @@ def _default_data_dir() -> Path:
         return Path.home() / ".local" / "share" / "harmonie"
 
 
+CGROUP_V2_CPU_MAX = Path("/sys/fs/cgroup/cpu.max")
+CGROUP_V1_QUOTA = Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+CGROUP_V1_PERIOD = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+
+
+def _cgroup_cpu_limit() -> int | None:
+    """CPUs a cgroup quota allows, or None when unlimited or unreadable.
+
+    `docker run --cpus=2` is a quota, not a smaller machine: the kernel still
+    reports every CPU, so a container has to read the quota to know its share.
+    Fractions round down, since one worker holds a model in memory whether or
+    not it gets a whole core.
+    """
+    try:
+        if CGROUP_V2_CPU_MAX.exists():
+            quota_s, period_s = CGROUP_V2_CPU_MAX.read_text().split()
+            if quota_s == "max":
+                return None
+            quota, period = int(quota_s), int(period_s)
+        elif CGROUP_V1_QUOTA.exists():
+            quota = int(CGROUP_V1_QUOTA.read_text())
+            period = int(CGROUP_V1_PERIOD.read_text())
+            if quota <= 0:
+                return None
+        else:
+            return None
+    except (OSError, ValueError):
+        return None
+    if period <= 0:
+        return None
+    return max(1, quota // period)
+
+
+def available_cpus() -> int:
+    """CPUs this process may actually use.
+
+    ``os.cpu_count()`` reports the machine, so a container limited to two CPUs
+    on a twelve-core host would otherwise start twelve analysis workers, each
+    holding its own copy of the models in memory.
+    """
+    if hasattr(os, "sched_getaffinity"):
+        # Respects --cpuset-cpus, taskset, and systemd CPUAffinity.
+        usable = len(os.sched_getaffinity(0))
+    else:
+        usable = os.cpu_count() or 1
+    limit = _cgroup_cpu_limit()
+    if limit is not None:
+        usable = min(usable, limit)
+    return max(1, usable)
+
+
 class Settings(BaseSettings):
     """Service configuration. Each field maps to a HARMONIE_* env var."""
 
@@ -115,7 +166,7 @@ class Settings(BaseSettings):
     def worker_count(self) -> int:
         if self.workers > 0:
             return self.workers
-        return max(1, os.cpu_count() or 1)
+        return available_cpus()
 
 
 _settings: Settings | None = None
