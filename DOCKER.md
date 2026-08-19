@@ -29,10 +29,12 @@ Both paths are fixed inside the container:
 | `/music` | Your library, mounted read-only. Mount several under `/music/...` if you have more than one. |
 | `/data` | `harmonie.db` and runtime state. This is the directory you back up or move. |
 
-Configuration is the same `HARMONIE_*` environment set as a normal install, so
-`-e HARMONIE_WORKERS=4` or a `.env` file works as documented in the
-[README](README.md). Leave `HARMONIE_LIBRARIES` and `HARMONIE_DATA_DIR` at their
-container defaults.
+`MUSIC_DIR` is the host directory compose mounts at `/music`. The container's
+`HARMONIE_LIBRARIES` is already `/music` and is not read from `.env`.
+
+Configuration is otherwise the same `HARMONIE_*` environment set as a normal
+install, so `-e HARMONIE_WORKERS=4` or a `.env` file works as documented in the
+[README](README.md).
 
 ## Moving the database to another host
 

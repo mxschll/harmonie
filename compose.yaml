@@ -11,12 +11,9 @@ services:
     platform: linux/amd64
     container_name: harmonie
     restart: unless-stopped
-    # tini as PID 1: forwards signals to harmonie and reaps analysis workers
-    # that exit unexpectedly, so a long-running container collects no zombies.
+    # tini as PID 1: forwards signals to harmonie and reaps exited workers.
     init: true
-    # A scan in flight can take longer than Docker's default 10s to wind down.
-    # Killing it is safe (SQLite is crash-safe, unfinished tracks are redone)
-    # but a clean stop is nicer.
+    # A scan in flight can take longer to wind down than Docker's default 10s.
     stop_grace_period: 60s
     ports:
       - "8842:8842"
@@ -24,8 +21,8 @@ services:
       # The database and runtime state. Copy this directory to move a scanned
       # library to another host — see DOCKER.md.
       - ./harmonie-data:/data
-      # Your library. Always mounted at /music: the paths stored in the
-      # database are container paths, which is what makes it portable.
+      # Your library, on the host. The container reads it at /music, which is
+      # where its HARMONIE_LIBRARIES points.
       - ${MUSIC_DIR:?set MUSIC_DIR to your music directory}:/music:ro
     environment:
       # Analysis workers. Unset or 0 uses every core.
