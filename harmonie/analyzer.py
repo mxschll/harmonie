@@ -13,7 +13,13 @@ from pathlib import Path
 from . import __version__
 from .config import Settings
 from .db import Database
-from .features import DESCRIPTOR_VERSION, EMBEDDING_DIM, MODEL_NAME, DownloadCancelled
+from .features import (
+    DESCRIPTOR_VERSION,
+    EMBEDDING_DIM,
+    MODEL_NAME,
+    DownloadCancelled,
+    file_fingerprint,
+)
 from .index import EmbeddingIndex
 from .scan import iter_audio_files, split_library_path
 from .workers import (
@@ -89,44 +95,124 @@ class ScanStatus:
 # ---------------------------------------------------------------------------
 
 
+def _fingerprint_or_none(path: str, size: int) -> str | None:
+    """Fingerprint for storage. A file that vanished between analysis and this
+    call is not worth failing the whole result for."""
+    try:
+        return file_fingerprint(Path(path), size)
+    except OSError as exc:
+        logger.debug("could not fingerprint %s: %s", path, exc)
+        return None
+
+
 class _LibraryRelocator:
     """Matches files to index rows left behind by a library that moved.
 
     Analysis is keyed on absolute path, so a library remounted somewhere else
     (a native install switching to a container, say) looks entirely new: every
     track would be analysed again and the old rows would linger, since pruning
-    only touches paths under the roots it scanned. Library-relative path plus
-    size and mtime identifies the same file across the move.
+    only touches paths under the roots it scanned.
+
+    Two ways to recognise the same file, cheapest first:
+
+    1. Library-relative path, with size and mtime agreeing. Costs nothing
+       beyond the stat the scan already did.
+    2. Content fingerprint. Reads 128 KiB, and unlike mtime it survives being
+       copied between systems, so it catches a library whose timestamps were
+       rewritten on the way. Only files under a root that is no longer
+       configured are considered, so a rename inside a library that stayed put
+       is still a new file.
     """
 
-    def __init__(self, db, roots: list[Path], index: dict[str, tuple[int, int, float]]):
+    def __init__(self, db, roots: list[Path], rows: list[dict]):
         self._db = db
         self._roots = roots
-        self._index = index
+        self._by_relative_path = _unique_by(rows, "relative_path")
+        self._by_fingerprint = _unique_by(rows, "fingerprint")
         self.moved = 0
+        self.matched_by_fingerprint = 0
+
+    def __bool__(self) -> bool:
+        return bool(self._by_relative_path or self._by_fingerprint)
 
     def __call__(self, path: str, size: int, mtime: float) -> bool:
-        # A dict lookup and some string work per file; no queries unless a
-        # candidate actually matches.
         library_root, relative_path = split_library_path(path, self._roots)
         if relative_path is None or library_root is None:
             return False
-        candidate = self._index.get(relative_path)
-        if candidate is None:
+
+        row = self._by_relative_path.get(relative_path)
+        if row is not None and self._same_file(row, size, mtime):
+            return self._point_at(row, path, library_root, relative_path)
+
+        if not self._by_fingerprint:
             return False
-        track_id, old_size, old_mtime = candidate
-        if old_size != int(size) or abs(old_mtime - float(mtime)) > 1.0:
+        try:
+            fingerprint = file_fingerprint(Path(path), size)
+        except OSError:
             return False
+        row = self._by_fingerprint.get(fingerprint)
+        if row is None:
+            return False
+        # The fingerprint covers size and content, so only the timestamp can
+        # differ; refresh it or the file goes straight back for re-analysis.
+        moved = self._point_at(
+            row, path, library_root, relative_path, mtime=mtime, fingerprint=fingerprint
+        )
+        if moved:
+            self.matched_by_fingerprint += 1
+        return moved
+
+    @staticmethod
+    def _same_file(row: dict, size: int, mtime: float) -> bool:
+        return (
+            int(row["size"]) == int(size)
+            and abs(float(row["mtime"]) - float(mtime)) <= 1.0
+        )
+
+    def _point_at(
+        self,
+        row: dict,
+        path: str,
+        library_root: str,
+        relative_path: str,
+        *,
+        mtime: float | None = None,
+        fingerprint: str | None = None,
+    ) -> bool:
         if not self._db.relocate_track(
-            track_id,
+            row["id"],
             path=path,
             library_root=library_root,
             relative_path=relative_path,
+            mtime=mtime,
+            fingerprint=fingerprint,
         ):
             return False
-        del self._index[relative_path]
+        self._by_relative_path.pop(row["relative_path"], None)
+        self._by_fingerprint.pop(row["fingerprint"], None)
         self.moved += 1
         return True
+
+
+def _unique_by(rows: list[dict], key: str) -> dict[str, dict]:
+    """Index ``rows`` by ``key``, dropping values that appear more than once.
+
+    An ambiguous key cannot identify a file, and guessing could attach an
+    embedding to the wrong track.
+    """
+    index: dict[str, dict] = {}
+    ambiguous: set[str] = set()
+    for row in rows:
+        value = row.get(key)
+        if value is None:
+            continue
+        if value in index:
+            ambiguous.add(value)
+            continue
+        index[value] = row
+    for value in ambiguous:
+        del index[value]
+    return index
 
 
 class Analyzer:
@@ -352,10 +438,12 @@ class Analyzer:
             )
             if relocator is not None and relocator.moved:
                 logger.info(
-                    "re-pointed %d track(s) to their new location; no "
-                    "re-analysis needed",
+                    "re-pointed %d track(s) to their new location "
+                    "(%d by content fingerprint); no re-analysis needed",
                     relocator.moved,
+                    relocator.matched_by_fingerprint,
                 )
+            self._record_fingerprints(files)
             self.status.skipped = skipped
             logger.info(
                 "jobs: full=%d, descriptors_only=%d, skipped=%d",
@@ -468,16 +556,44 @@ class Analyzer:
         orphaned = self.db.orphaned_library_roots(configured)
         if not orphaned:
             return None
-        index = self.db.relocation_index(orphaned)
-        if not index:
+        rows = self.db.relocation_rows(orphaned)
+        relocator = _LibraryRelocator(self.db, roots, rows)
+        if not relocator:
             return None
         logger.info(
             "index holds %d track(s) under %s, which is not a configured "
-            "library; matching them by library-relative path",
-            len(index),
+            "library; matching them by relative path and content fingerprint",
+            len(rows),
             ", ".join(orphaned),
         )
-        return _LibraryRelocator(self.db, roots, index)
+        return relocator
+
+    def _record_fingerprints(self, files: list[Path]) -> int:
+        """Give already-analysed rows a fingerprint if they lack one.
+
+        Costs one 128 KiB read per track, once. Without it a library copied to
+        another system has nothing but mtime to match on, and mtime does not
+        survive most copies.
+        """
+        if not self.db.count_missing_fingerprints():
+            return 0
+        missing = self.db.tracks_missing_fingerprint([str(f) for f in files])
+        if not missing:
+            return 0
+        recorded = 0
+        for path, track_id in missing.items():
+            if self._cancel_event.is_set():
+                break
+            try:
+                self.db.set_fingerprint(track_id, file_fingerprint(Path(path)))
+                recorded += 1
+            except OSError as exc:
+                logger.debug("could not fingerprint %s: %s", path, exc)
+        if recorded:
+            logger.info(
+                "recorded content fingerprints for %d existing track(s)", recorded
+            )
+        return recorded
 
     def _handle_result(self, result, *, reachable_roots: list[Path]) -> None:
         if isinstance(result, FullResult):
@@ -495,6 +611,7 @@ class Analyzer:
                     tags=result.tags,
                     library_root=lib_root,
                     relative_path=rel_path,
+                    fingerprint=_fingerprint_or_none(result.path, result.size),
                     style_activations=result.style_activations,
                     top_styles=result.top_styles,
                 )

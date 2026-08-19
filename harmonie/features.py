@@ -555,3 +555,35 @@ def file_signature(path: Path) -> tuple[int, float]:
 
     st = os.stat(path)
     return st.st_size, st.st_mtime
+
+
+FINGERPRINT_CHUNK = 1 << 16
+
+
+def file_fingerprint(path: Path, size: int | None = None) -> str:
+    """Identify a file by its content rather than its location.
+
+    Hashes the size plus the first and last 64 KiB, which for audio files is
+    effectively unique: headers and tags differ even between tracks of identical
+    length. Reading the whole file would cost hours on a large library for no
+    practical gain, and two files that did collide would be byte-identical
+    anyway, so sharing an embedding between them is correct.
+
+    Unlike mtime this survives copying a library between systems, so it is what
+    tells a scan that a track it is looking at has already been analysed.
+    """
+    import hashlib
+    import os
+
+    if size is None:
+        size = os.stat(path).st_size
+    h = hashlib.blake2b(digest_size=16)
+    h.update(str(size).encode())
+    with open(path, "rb") as fh:
+        h.update(fh.read(FINGERPRINT_CHUNK))
+        # Skip the tail read when the file is small enough that the head
+        # already covers it.
+        if size > 2 * FINGERPRINT_CHUNK:
+            fh.seek(-FINGERPRINT_CHUNK, os.SEEK_END)
+            h.update(fh.read(FINGERPRINT_CHUNK))
+    return h.hexdigest()
