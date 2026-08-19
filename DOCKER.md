@@ -1,19 +1,18 @@
 > [!NOTE]
-> Everything below assumes an x86-64 host with AVX (Intel Sandy Bridge / AMD
-> Bulldozer, 2011 or newer). See [CPU and architecture](#cpu-and-architecture).
+> The image requires an x86-64 host with AVX (Intel Sandy Bridge / AMD
+> Bulldozer, 2011 or newer). See
+> [CPU, architecture, and GPUs](#cpu-architecture-and-gpus).
 
 ## Run it
-
-One command, once you point it at your music:
 
 ```bash
 MUSIC_DIR=/path/to/music docker compose up -d
 ```
 
-Harmonie listens on port 8842 and starts its first scan immediately. Watch it
+Harmonie listens on port 8842 and starts its first scan immediately. Follow it
 with `docker compose logs -f`, or from the Jellyfin plugin's settings page.
 
-Prefer plain Docker:
+With plain Docker:
 
 ```bash
 docker run -d --name harmonie \
@@ -23,7 +22,7 @@ docker run -d --name harmonie \
   ghcr.io/mxschll/harmonie:latest
 ```
 
-Two paths matter, and both are fixed inside the container:
+Both paths are fixed inside the container:
 
 | Container path | What it holds |
 | --- | --- |
@@ -32,19 +31,14 @@ Two paths matter, and both are fixed inside the container:
 
 Configuration is the same `HARMONIE_*` environment set as a normal install, so
 `-e HARMONIE_WORKERS=4` or a `.env` file works as documented in the
-[README](README.md). Leave `HARMONIE_LIBRARIES` and `HARMONIE_DATA_DIR` alone
-unless you know why you are changing them.
+[README](README.md). Leave `HARMONIE_LIBRARIES` and `HARMONIE_DATA_DIR` at their
+container defaults.
 
 ## Moving the database to another host
 
-Scanning is the expensive part: it decodes every track and runs the Essentia
-models over it. Serving is cheap — similarity queries are arithmetic over
-vectors already in the database. So scan on the fastest machine you have, then
-move the result to whatever box runs Jellyfin.
-
-This works because the container always sees the library at `/music`, so the
-stored paths stay correct on a host whose library sits somewhere else. Copying
-the library across is fine too: tracks are recognised by content, not location.
+Scanning is CPU-bound; serving is not. Scan on the fastest machine available,
+then move the database to the host that runs Jellyfin. Tracks are recognised by
+content, so the library may sit at a different path on the second host.
 
 On the fast host:
 
@@ -53,7 +47,7 @@ MUSIC_DIR=/path/to/music docker compose up
 ```
 
 Wait for the scan to finish — `docker compose logs -f`, or
-`docker compose exec harmonie harmonie status`. Then stop it and copy the data
+`docker compose exec harmonie harmonie status` — then stop it and copy the data
 directory across:
 
 ```bash
@@ -61,23 +55,12 @@ docker compose down
 rsync -a harmonie-data/ user@slow-host:/srv/harmonie/harmonie-data/
 ```
 
-On the slow host, start it the same way, with `MUSIC_DIR` pointing at wherever
-the library lives there.
-
-Turn off scanning entirely if the second host should never analyse anything:
-
-```bash
-HARMONIE_SCAN_ON_STARTUP=false
-HARMONIE_SCAN_INTERVAL_HOURS=0
-```
-
-New files added later will not be picked up while that is set. Either scan
-again on the fast host and re-copy, or let the slow host scan on a schedule and
-accept that it will take a while.
+Start it the same way on the slow host, with `MUSIC_DIR` pointing at the library
+there.
 
 ### Scan without serving
 
-To run one pass and exit — useful in a cron job or on a machine you only borrow:
+One pass, then exit:
 
 ```bash
 MUSIC_DIR=/path/to/music docker compose run --rm harmonie scan
@@ -87,45 +70,39 @@ Any CLI subcommand works the same way: `status`, `info`, `similar`, `scans`.
 
 ## Running it as a service
 
-The container is a long-lived service, not a batch job. `harmonie serve` runs
-the HTTP API and its own scheduler: a scan on startup, then one every
-`HARMONIE_SCAN_INTERVAL_HOURS` (24 by default). Nothing external needs to
-trigger it — no cron, no separate worker container.
+`harmonie serve` runs the HTTP API and the scheduler: a scan on startup, then
+one every `HARMONIE_SCAN_INTERVAL_HOURS` (24 by default). A health check calls
+`/health` every 30 seconds.
 
 The compose file sets `restart: unless-stopped`, `init: true` so signals reach
-harmonie and dead workers get reaped, and a 60-second stop grace period, since
-a scan in flight can take longer than Docker's default 10 seconds to wind down.
-A hard kill is safe anyway: SQLite is crash-safe and unfinished tracks are
-simply analysed again next time.
-
-Docker's own health check calls `/health` every 30 seconds, so `docker ps` and
-orchestrators can see whether the service is actually answering.
+harmonie and exited workers are reaped, and `stop_grace_period: 60s` because a
+scan in flight can take longer to wind down than Docker's default 10 seconds.
+Killing it mid-scan is safe: unfinished tracks are analysed on the next run.
 
 > [!IMPORTANT]
 > **Analysis workers stay resident between scans.** The pool is built at the
-> first scan and kept, so each worker holds TensorFlow and the models in memory
-> for the life of the container — an idle container with two workers measured
-> 1.2 GB. The default is one worker per core, so on a 12-core host you are
-> holding that many copies permanently. Set `HARMONIE_WORKERS` to something
-> your host can afford, especially on a machine that mostly serves:
+> first scan and kept, each worker holding TensorFlow and the models in memory.
+> An idle container with two workers uses 1.2 GB. The default is one worker per
+> core, so set `HARMONIE_WORKERS` to what the host can afford:
 >
 > ```
 > HARMONIE_WORKERS=2
 > ```
 
-For a host that should never analyse anything, disable scanning entirely and
-the pool is never built:
+Disabling scanning means no pool is built at all:
 
 ```
 HARMONIE_SCAN_ON_STARTUP=false
 HARMONIE_SCAN_INTERVAL_HOURS=0
 ```
 
+New files are not picked up while that is set. Scan on another host and copy the
+data directory across.
+
 ## Switching from a native install
 
-Copy your existing database into the directory you mount at `/data` and start
-the container as usual. Stop the native harmonie first, so its write-ahead log
-is folded into the database file:
+Stop the native harmonie, so its write-ahead log is folded into the database
+file, then copy the database into the directory you mount at `/data`:
 
 ```bash
 cp ~/.local/share/harmonie/harmonie.db ./harmonie-data/
@@ -133,57 +110,50 @@ cp ~/.local/share/harmonie/harmonie.db ./harmonie-data/
 
 On macOS the file lives in `~/Library/Application Support/harmonie/`.
 
-The library now sits at `/music` instead of wherever it was, which the first
-scan sorts out on its own: it should report `full=0` with everything skipped.
+The library is at `/music` in the container rather than its old path. The first
+scan matches the existing analysis to it and reports `full=0`.
 
 ## CPU, architecture, and GPUs
 
-The image is `linux/amd64` only, and needs a CPU with AVX.
+The image is `linux/amd64` only and needs a CPU with AVX.
 
-Harmonie's analysis comes from `essentia-tensorflow`, which publishes wheels for
-x86-64 Linux and nothing else — there is no arm64 build, so Raspberry Pis and
-ARM NAS boxes cannot run this image except under emulation, which is far too
-slow for scanning. The bundled TensorFlow is 2.5, built with AVX like every
-official TensorFlow binary, so a CPU older than roughly 2011 fails at import
-with `Illegal instruction`.
+Analysis comes from `essentia-tensorflow`, which publishes wheels for x86-64
+Linux and nothing else. There is no arm64 build, so ARM boards and NAS boxes can
+only run this image under emulation, which is too slow to scan with. The bundled
+TensorFlow is 2.5, built with AVX, so a CPU older than roughly 2011 fails at
+import with `Illegal instruction`.
 
-**AVX2 is not required.** TensorFlow uses it when the CPU has it and falls back
-when it does not, so one image covers both. There is nothing to gain from a
-second tag here: the only way to change the instruction baseline is compiling
-TensorFlow and Essentia from source, which is a different project.
+AVX2 is not required: TensorFlow uses it when the CPU has it and falls back when
+it does not.
 
-Check a host before you trust it with:
+Check a host:
 
 ```bash
 grep -o 'avx[2]*' /proc/cpuinfo | sort -u
 docker run --rm ghcr.io/mxschll/harmonie:latest python -c "import essentia.standard; print('ok')"
 ```
 
-Scanning is CPU-bound and parallel. Set `HARMONIE_WORKERS` to the number of
-cores to spend on it; the default uses all of them, at roughly 1 GB of RAM each.
+Scanning is parallel. `HARMONIE_WORKERS` sets how many cores to spend on it; the
+default uses all of them, at roughly 1 GB of RAM each.
 
 ### GPUs
 
-The TensorFlow bundled inside the wheel is a GPU-capable build — it looks for
-`libcuda.so.1` at startup and logs a failure to load it — but this image ships
-no CUDA libraries, so it always runs on the CPU.
+The bundled TensorFlow is a GPU-capable build — it looks for `libcuda.so.1` at
+startup and logs the failure to load it — but the image ships no CUDA libraries,
+so analysis runs on the CPU.
 
-Making the GPU usable would mean a second image built on a CUDA base matching
-that TensorFlow (2.5's tested pairing is CUDA 11.2 with cuDNN 8.1), run with
-`--gpus all` and the NVIDIA Container Toolkit. That is the one case where a
-second tag would buy something. It is untested here, and worth measuring before
-building: a scan also decodes every file on the CPU, so the model inference may
-not be the part that is slow.
+A GPU image would need a CUDA base matching TensorFlow 2.5 (CUDA 11.2 with cuDNN
+8.1), run with `--gpus all` and the NVIDIA Container Toolkit. That is untested
+here.
 
 ## Notes
 
 The Essentia models are baked into the image, so a fresh container needs no
-network access and no warm-up download.
+network access on first run.
 
-Files written to `/data` are owned by root, since the container runs as root to
-keep permissions simple. Add `user: "1000:1000"` in `compose.yaml` (and make the
-data directory writable by that user) if that matters to you.
+Files written to `/data` are owned by root, since the container runs as root.
+Add `user: "1000:1000"` in `compose.yaml`, and make the data directory writable
+by that user, to change that.
 
-If you previously ran Harmonie outside Docker and configured path mappings in
-the Jellyfin plugin, revisit them: Harmonie now reports paths under `/music`.
-Tag-based matching is unaffected.
+Harmonie reports paths under `/music`, so revisit any path mappings configured
+in the Jellyfin plugin. Tag-based matching is unaffected.
