@@ -21,8 +21,7 @@ services:
       # another machine, such as a Jellyfin host on the LAN.
       - ${BIND_ADDRESS:-127.0.0.1}:8842:8842
     volumes:
-      # The database and runtime state. Copy this directory to move a scanned
-      # library to another host — see DOCKER.md.
+      # The database and runtime state. This is the directory to back up.
       - ./harmonie-data:/data
       # Your library, on the host. The container reads it at /music, which is
       # where its HARMONIE_LIBRARIES points.

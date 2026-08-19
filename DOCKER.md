@@ -46,31 +46,7 @@ Compose forwards `HARMONIE_WORKERS`, `HARMONIE_SCAN_INTERVAL_HOURS`,
 `HARMONIE_*` setting from the [README](README.md) to the `environment:` block
 yourself.
 
-## Moving the database to another host
-
-Scanning is CPU-bound; serving is not. Scan on the fastest machine available,
-then move the database to the host that runs Jellyfin. Tracks are recognised by
-content, so the library may sit at a different path on the second host.
-
-On the fast host:
-
-```bash
-MUSIC_DIR=/path/to/music docker compose up
-```
-
-Wait for the scan to finish — `docker compose logs -f`, or
-`docker compose exec harmonie harmonie status` — then stop it and copy the data
-directory across:
-
-```bash
-docker compose down
-rsync -a harmonie-data/ user@slow-host:/srv/harmonie/harmonie-data/
-```
-
-Start it the same way on the slow host, with `MUSIC_DIR` pointing at the library
-there.
-
-### Scan without serving
+## Scan without serving
 
 One pass, then exit:
 
@@ -108,8 +84,7 @@ HARMONIE_SCAN_ON_STARTUP=false
 HARMONIE_SCAN_INTERVAL_HOURS=0
 ```
 
-New files are not picked up while that is set. Scan on another host and copy the
-data directory across.
+New files are not picked up while that is set.
 
 ## Switching from a native install
 
