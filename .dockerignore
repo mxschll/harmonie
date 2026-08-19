@@ -16,4 +16,6 @@ docs/
 .env
 .github/
 
-# .git stays: setuptools-scm reads it to derive the version.
+# .git stays: setuptools-scm reads it to derive the version, and there is no
+# fallback_version to build without it. CI checks out with
+# persist-credentials: false so no token reaches the build context or its cache.
