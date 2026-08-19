@@ -75,7 +75,7 @@ All settings come from environment variables (or a `.env` file in the working di
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HARMONIE_LIBRARIES` | (none) | Comma- or colon-separated absolute paths to scan |
+| `HARMONIE_LIBRARIES` | (none) | Comma- or colon-separated absolute paths to scan. Moving a library to a new path does not cause a re-analysis. |
 | `HARMONIE_DATA_DIR` | platform user-data dir | Where to put `harmonie.db`. Defaults to `~/.local/share/harmonie` on Linux, `~/Library/Application Support/harmonie` on macOS. |
 | `HARMONIE_WORKERS` | CPU count | Analysis worker processes. Each worker can use about 1 GB of RAM. |
 | `HARMONIE_SCAN_INTERVAL_HOURS` | `24` | Periodic scan interval (`0` disables) |

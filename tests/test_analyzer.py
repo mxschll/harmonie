@@ -31,7 +31,9 @@ def harness(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(analyzer_mod, "iter_audio_files", fake_iter)
 
-    def fake_build_jobs(db, files, *, model_name, force, on_progress=None):
+    def fake_build_jobs(
+        db, files, *, model_name, force, on_progress=None, relocate=None
+    ):
         observations.append(("build_jobs", analyzer.status.phase))
         if on_progress is not None:
             on_progress(len(files))
@@ -114,7 +116,9 @@ def test_scan_with_no_jobs_skips_extracting(tmp_path, monkeypatch):
             lambda roots: iter([Path("/lib/a.flac")]),
         )
 
-        def empty_jobs(db, files, *, model_name, force, on_progress=None):
+        def empty_jobs(
+            db, files, *, model_name, force, on_progress=None, relocate=None
+        ):
             return [], [], 1
 
         monkeypatch.setattr(analyzer_mod, "build_jobs", empty_jobs)
@@ -221,7 +225,7 @@ def test_scan_records_each_failure(tmp_path, monkeypatch):
             lambda roots: iter([Path("/lib/a.flac"), Path("/lib/b.flac")]),
         )
 
-        def two_jobs(db, files, *, model_name, force, on_progress=None):
+        def two_jobs(db, files, *, model_name, force, on_progress=None, relocate=None):
             from harmonie.workers import FullJob
 
             return (
@@ -350,7 +354,7 @@ class TestCancel:
         monkeypatch.setattr(
             analyzer_mod,
             "build_jobs",
-            lambda db, files, *, model_name, force, on_progress=None: (
+            lambda db, files, *, model_name, force, on_progress=None, relocate=None: (
                 [FullJob(path=str(f), size=1, mtime=1.0) for f in files],
                 [],
                 0,
@@ -374,6 +378,7 @@ class TestCancel:
                         path=j.path,
                         size=1,
                         mtime=1.0,
+                        fingerprint=None,
                         duration=1.0,
                         embedding=__import__("numpy").zeros(1280, dtype="float32"),
                         model="m",

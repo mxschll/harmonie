@@ -27,7 +27,9 @@ def scan_harness(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(analyzer_mod, "iter_audio_files", fake_iter)
 
-    def fake_build_jobs(db, files, *, model_name, force, on_progress=None):
+    def fake_build_jobs(
+        db, files, *, model_name, force, on_progress=None, relocate=None
+    ):
         jobs = [FullJob(path=str(f), size=1, mtime=1.0) for f in files]
         return jobs, [], 0
 

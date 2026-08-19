@@ -555,3 +555,38 @@ def file_signature(path: Path) -> tuple[int, float]:
 
     st = os.stat(path)
     return st.st_size, st.st_mtime
+
+
+FINGERPRINT_CHUNK = 1 << 16
+
+
+def file_fingerprint(path: Path, size: int | None = None) -> str:
+    """Identify a file by sampling its content rather than by its location.
+
+    Hashes the size plus the first and last 64 KiB. Unlike mtime this survives
+    copying a library between systems, which is what lets a scan recognise a
+    track it has already analysed.
+
+    It samples rather than reads everything, so two files with the same size,
+    head and tail collide — a difference confined to the middle is invisible.
+    That is a deliberate trade: hashing a large library in full costs hours of
+    I/O per scan. Callers must treat a fingerprint shared by several rows as
+    identifying nothing and analyse instead, since the sample cannot say which
+    file is which.
+    """
+    import hashlib
+    import os
+
+    if size is None:
+        size = os.stat(path).st_size
+    h = hashlib.blake2b(digest_size=16)
+    h.update(str(size).encode())
+    with open(path, "rb") as fh:
+        h.update(fh.read(FINGERPRINT_CHUNK))
+        # Anything past the head gets covered by the tail read. Requiring twice
+        # the chunk size here left files of 64-128 KiB hashed on their opening
+        # bytes alone.
+        if size > FINGERPRINT_CHUNK:
+            fh.seek(-min(FINGERPRINT_CHUNK, size), os.SEEK_END)
+            h.update(fh.read(FINGERPRINT_CHUNK))
+    return h.hexdigest()

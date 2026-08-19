@@ -16,6 +16,7 @@ from .features import (
     Descriptors,
     EffnetExtractor,
     TrackFeatures,
+    file_fingerprint,
     file_signature,
     prefetch_models,
     top_styles,
@@ -27,6 +28,14 @@ logger = logging.getLogger("harmonie.workers")
 # How often a scan collecting results looks up to check whether it was
 # cancelled. Short enough that shutdown feels immediate.
 RESULT_POLL_SEC = 0.5
+
+
+def _fingerprint_or_none(path: str, size: int) -> str | None:
+    """A file that vanished mid-scan is not worth failing the result for."""
+    try:
+        return file_fingerprint(Path(path), size)
+    except OSError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +64,9 @@ class FullResult:
     path: str
     size: int
     mtime: float
+    # Computed here rather than by the caller so it describes the same bytes
+    # the embedding was extracted from.
+    fingerprint: str | None
     embedding: np.ndarray
     duration: float
     model: str
@@ -142,6 +154,7 @@ def _do_full(job: FullJob) -> WorkerResult:
             path=job.path,
             size=job.size,
             mtime=job.mtime,
+            fingerprint=_fingerprint_or_none(job.path, job.size),
             embedding=feats.embedding,
             duration=feats.duration,
             model=feats.model,
@@ -278,12 +291,15 @@ def build_jobs(
     model_name: str,
     force: bool,
     on_progress: Callable[[int], None] | None = None,
+    relocate: Callable[[str, int, float], bool] | None = None,
 ) -> tuple[list[FullJob], list[DescriptorJob], int]:
     """Decide which files need a full analysis vs. a descriptor refresh.
 
     Returns ``(full_jobs, descriptor_jobs, skipped_count)``. Files that
     don't exist or can't be stat'd are silently dropped. ``on_progress``
-    is invoked with the running count after every file.
+    is invoked with the running count after every file. ``relocate``, when
+    given, is offered each file before the decision, so a library that moved
+    is matched to its existing rows instead of analysed from scratch.
     """
     full_jobs: list[FullJob] = []
     desc_jobs: list[DescriptorJob] = []
@@ -296,6 +312,8 @@ def build_jobs(
                 on_progress(i)
             continue
         path_str = str(f)
+        if relocate is not None:
+            relocate(path_str, size, mtime)
         if force or db.needs_embedding(path_str, size, mtime, model_name):
             full_jobs.append(FullJob(path=path_str, size=size, mtime=mtime))
         elif db.needs_descriptor_refresh(path_str, DESCRIPTOR_VERSION):

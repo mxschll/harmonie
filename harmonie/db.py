@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -230,6 +230,7 @@ class Database:
         tags: Tags | None = None,
         library_root: str | None = None,
         relative_path: str | None = None,
+        fingerprint: str | None = None,
         style_activations: np.ndarray | None = None,
         top_styles: list[tuple[str, float]] | None = None,
     ) -> int:
@@ -243,7 +244,7 @@ class Database:
             cur.execute(
                 """
                 INSERT INTO tracks (
-                    path, library_root, relative_path,
+                    path, library_root, relative_path, fingerprint,
                     size, mtime, duration, embedding, embedding_dim, model,
                     descriptor_version,
                     bpm, bpm_confidence, key, scale, key_strength,
@@ -253,10 +254,14 @@ class Database:
                     analyzed_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
                     library_root         = excluded.library_root,
                     relative_path        = excluded.relative_path,
+                    fingerprint          = COALESCE(
+                                               excluded.fingerprint,
+                                               tracks.fingerprint
+                                           ),
                     size                 = excluded.size,
                     mtime                = excluded.mtime,
                     duration             = excluded.duration,
@@ -283,6 +288,7 @@ class Database:
                     path,
                     library_root,
                     relative_path,
+                    fingerprint,
                     int(size),
                     float(mtime),
                     float(duration),
@@ -735,6 +741,124 @@ class Database:
             }
             for r in cur
         ]
+
+    def orphaned_library_roots(self, known_roots: Iterable[str]) -> list[str]:
+        """Library roots in the index that are not configured any more.
+
+        A non-empty result means the library may have been remounted somewhere
+        else — the common case being a move into a container. One indexed
+        DISTINCT read, so scans of an unchanged library pay almost nothing.
+        """
+        known = {str(r) for r in known_roots}
+        cur = self._conn.execute(
+            "SELECT DISTINCT library_root FROM tracks WHERE library_root IS NOT NULL"
+        )
+        return sorted(row[0] for row in cur if row[0] not in known)
+
+    def relocation_rows(self, roots: Iterable[str]) -> list[dict]:
+        """Rows under ``roots``, with everything needed to recognise the same
+        file elsewhere: fingerprint, library-relative path, size, mtime."""
+        roots = [str(r) for r in roots]
+        if not roots:
+            return []
+        placeholders = ",".join("?" * len(roots))
+        cur = self._conn.execute(
+            "SELECT id, relative_path, fingerprint, size, mtime FROM tracks "
+            f"WHERE library_root IN ({placeholders})",
+            roots,
+        )
+        return [dict(row) for row in cur]
+
+    def set_fingerprint(
+        self,
+        track_id: int,
+        fingerprint: str,
+        *,
+        expect_size: int | None = None,
+        expect_mtime: float | None = None,
+    ) -> bool:
+        """Record a fingerprint, optionally only while the row still describes
+        the bytes that were hashed.
+
+        The guard matters because the file is read separately from the row: if
+        it changed in between, storing the hash would tie new content to the old
+        analysis.
+        """
+        sql = "UPDATE tracks SET fingerprint = ? WHERE id = ?"
+        params: list[object] = [fingerprint, track_id]
+        if expect_size is not None:
+            sql += " AND size = ?"
+            params.append(int(expect_size))
+        if expect_mtime is not None:
+            sql += " AND abs(mtime - ?) <= 1.0"
+            params.append(float(expect_mtime))
+        with self.transaction() as cur:
+            cur.execute(sql, tuple(params))
+            return cur.rowcount > 0
+
+    def count_missing_fingerprints(self) -> int:
+        """How many rows still lack a fingerprint. Indexed, so a fully
+        fingerprinted library can skip the backfill for the price of one read."""
+        cur = self._conn.execute(
+            "SELECT COUNT(*) FROM tracks WHERE fingerprint IS NULL"
+        )
+        return int(cur.fetchone()[0])
+
+    def tracks_missing_fingerprint(self, paths: Iterable[str]) -> dict[str, int]:
+        """Map path to row id for rows with no fingerprint yet, limited to
+        ``paths``. Backfills rows written before fingerprints existed."""
+        paths = [str(p) for p in paths]
+        out: dict[str, int] = {}
+        # Chunked to stay under SQLite's bound-variable limit.
+        for start in range(0, len(paths), 500):
+            chunk = paths[start : start + 500]
+            placeholders = ",".join("?" * len(chunk))
+            cur = self._conn.execute(
+                "SELECT id, path FROM tracks "
+                f"WHERE fingerprint IS NULL AND path IN ({placeholders})",
+                chunk,
+            )
+            for row in cur:
+                out[row["path"]] = int(row["id"])
+        return out
+
+    def relocate_track(
+        self,
+        track_id: int,
+        *,
+        path: str,
+        library_root: str,
+        relative_path: str,
+        mtime: float | None = None,
+        fingerprint: str | None = None,
+    ) -> bool:
+        """Point an existing row at the same file under a new absolute path.
+
+        ``mtime`` is refreshed for files matched by fingerprint: a copied file
+        usually arrives with a new mtime, and keeping the old one would send it
+        straight back for re-analysis.
+
+        Returns False if another row already holds that path, in which case the
+        caller should treat the file as new.
+        """
+        sets = ["path = ?", "library_root = ?", "relative_path = ?"]
+        params: list[object] = [path, library_root, relative_path]
+        if mtime is not None:
+            sets.append("mtime = ?")
+            params.append(float(mtime))
+        if fingerprint is not None:
+            sets.append("fingerprint = ?")
+            params.append(fingerprint)
+        params.append(track_id)
+        try:
+            with self.transaction() as cur:
+                cur.execute(
+                    f"UPDATE tracks SET {', '.join(sets)} WHERE id = ?",
+                    tuple(params),
+                )
+                return cur.rowcount > 0
+        except sqlite3.IntegrityError:
+            return False
 
     def needs_embedding(self, path: str, size: int, mtime: float, model: str) -> bool:
         meta = self.get_track_by_path(path)
