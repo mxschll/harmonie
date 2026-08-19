@@ -58,8 +58,8 @@ Any CLI subcommand works the same way: `status`, `info`, `similar`, `scans`.
 
 ## Running it as a service
 
-`harmonie serve` runs the HTTP API and the scheduler: a scan on startup, then
-one every `HARMONIE_SCAN_INTERVAL_HOURS` (24 by default). A health check calls
+The container serves the HTTP API and scans on its own: once at startup, then
+every `HARMONIE_SCAN_INTERVAL_HOURS` (24 by default). A health check calls
 `/health` every 30 seconds.
 
 The compose file sets `restart: unless-stopped`, `init: true` so signals reach
