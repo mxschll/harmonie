@@ -86,20 +86,6 @@ HARMONIE_SCAN_INTERVAL_HOURS=0
 
 New files are not picked up while that is set.
 
-## Switching from a native install
-
-Stop the native harmonie, then copy its database into the directory you mount at
-`/data`:
-
-```bash
-cp ~/.local/share/harmonie/harmonie.db ./harmonie-data/
-```
-
-On macOS the file lives in `~/Library/Application Support/harmonie/`.
-
-The library is at `/music` in the container rather than its old path. The first
-scan matches the existing analysis to it and reports `full=0`.
-
 ## CPU, architecture, and GPUs
 
 The image is `linux/amd64` only and needs a CPU with AVX.
