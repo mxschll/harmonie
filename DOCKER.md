@@ -85,7 +85,7 @@ Killing it mid-scan is safe: unfinished tracks are analysed on the next run.
 > **Analysis workers stay resident between scans.** The pool is built at the
 > first scan and kept, each worker holding TensorFlow and the models in memory.
 > An idle container with two workers uses 1.2 GB. The default is one worker per
-> core, so set `HARMONIE_WORKERS` to what the host can afford:
+> usable CPU, so set `HARMONIE_WORKERS` to what the host can afford in memory:
 >
 > ```
 > HARMONIE_WORKERS=2
@@ -136,7 +136,7 @@ docker run --rm ghcr.io/mxschll/harmonie:latest python -c "import essentia.stand
 ```
 
 Scanning is parallel. `HARMONIE_WORKERS` sets how many cores to spend on it; the
-default uses all of them, at roughly 1 GB of RAM each.
+default uses every CPU the container may use, at roughly 1 GB of RAM each.
 
 ### GPUs
 
