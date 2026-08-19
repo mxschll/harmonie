@@ -19,6 +19,7 @@ from .features import (
     MODEL_NAME,
     DownloadCancelled,
     file_fingerprint,
+    file_signature,
 )
 from .index import EmbeddingIndex
 from .scan import iter_audio_files, split_library_path
@@ -95,16 +96,6 @@ class ScanStatus:
 # ---------------------------------------------------------------------------
 
 
-def _fingerprint_or_none(path: str, size: int) -> str | None:
-    """Fingerprint for storage. A file that vanished between analysis and this
-    call is not worth failing the whole result for."""
-    try:
-        return file_fingerprint(Path(path), size)
-    except OSError as exc:
-        logger.debug("could not fingerprint %s: %s", path, exc)
-        return None
-
-
 class _LibraryRelocator:
     """Matches files to index rows left behind by a library that moved.
 
@@ -115,13 +106,15 @@ class _LibraryRelocator:
 
     Two ways to recognise the same file, cheapest first:
 
-    1. Library-relative path, with size and mtime agreeing. Costs nothing
-       beyond the stat the scan already did.
-    2. Content fingerprint. Reads 128 KiB, and unlike mtime it survives being
-       copied between systems, so it catches a library whose timestamps were
-       rewritten on the way. Only files under a root that is no longer
-       configured are considered, so a rename inside a library that stayed put
-       is still a new file.
+    1. Library-relative path, with size and mtime agreeing. When the row also
+       carries a fingerprint, it has to match: a file replaced by a different
+       one of the same size, close enough in time, would otherwise inherit the
+       old embedding. Rows predating fingerprints fall back to size and mtime,
+       the same evidence a scan of a stationary library already accepts.
+    2. Content fingerprint. Catches a library whose timestamps were rewritten
+       on the way, which is what most copies do. Only files under a root that
+       is no longer configured are considered, so a rename inside a library
+       that stayed put is still a new file.
     """
 
     def __init__(self, db, roots: list[Path], rows: list[dict]):
@@ -140,27 +133,42 @@ class _LibraryRelocator:
         if relative_path is None or library_root is None:
             return False
 
+        fingerprint: str | None = None
         row = self._by_relative_path.get(relative_path)
         if row is not None and self._same_file(row, size, mtime):
-            return self._point_at(row, path, library_root, relative_path)
+            if row["fingerprint"] is None:
+                return self._point_at(row, path, library_root, relative_path)
+            fingerprint = self._fingerprint(path, size)
+            if fingerprint is not None and fingerprint == row["fingerprint"]:
+                return self._point_at(row, path, library_root, relative_path)
+            # Same name and size, different content: this is a new file.
+            return False
 
         if not self._by_fingerprint:
             return False
-        try:
-            fingerprint = file_fingerprint(Path(path), size)
-        except OSError:
+        if fingerprint is None:
+            fingerprint = self._fingerprint(path, size)
+        if fingerprint is None:
             return False
         row = self._by_fingerprint.get(fingerprint)
         if row is None:
             return False
-        # The fingerprint covers size and content, so only the timestamp can
-        # differ; refresh it or the file goes straight back for re-analysis.
+        # The fingerprint covers size and sampled content, so only the
+        # timestamp can differ; refresh it or the file goes straight back for
+        # re-analysis.
         moved = self._point_at(
             row, path, library_root, relative_path, mtime=mtime, fingerprint=fingerprint
         )
         if moved:
             self.matched_by_fingerprint += 1
         return moved
+
+    @staticmethod
+    def _fingerprint(path: str, size: int) -> str | None:
+        try:
+            return file_fingerprint(Path(path), size)
+        except OSError:
+            return None
 
     @staticmethod
     def _same_file(row: dict, size: int, mtime: float) -> bool:
@@ -443,7 +451,7 @@ class Analyzer:
                     relocator.moved,
                     relocator.matched_by_fingerprint,
                 )
-            self._record_fingerprints(files)
+            self._record_fingerprints(files, exclude={j.path for j in full_jobs})
             self.status.skipped = skipped
             logger.info(
                 "jobs: full=%d, descriptors_only=%d, skipped=%d",
@@ -568,16 +576,22 @@ class Analyzer:
         )
         return relocator
 
-    def _record_fingerprints(self, files: list[Path]) -> int:
+    def _record_fingerprints(self, files: list[Path], *, exclude: set[str]) -> int:
         """Give already-analysed rows a fingerprint if they lack one.
 
         Costs one 128 KiB read per track, once. Without it a library copied to
         another system has nothing but mtime to match on, and mtime does not
         survive most copies.
+
+        Files queued for analysis are excluded. Fingerprinting a row whose file
+        has changed would bind the new content to the old embedding, and if the
+        analysis then failed or was cancelled, a later move would match that
+        fingerprint and keep serving the stale result.
         """
         if not self.db.count_missing_fingerprints():
             return 0
-        missing = self.db.tracks_missing_fingerprint([str(f) for f in files])
+        candidates = [str(f) for f in files if str(f) not in exclude]
+        missing = self.db.tracks_missing_fingerprint(candidates)
         if not missing:
             return 0
         recorded = 0
@@ -585,10 +599,16 @@ class Analyzer:
             if self._cancel_event.is_set():
                 break
             try:
-                self.db.set_fingerprint(track_id, file_fingerprint(Path(path)))
-                recorded += 1
+                size, mtime = file_signature(Path(path))
+                fingerprint = file_fingerprint(Path(path), size)
             except OSError as exc:
                 logger.debug("could not fingerprint %s: %s", path, exc)
+                continue
+            # Guarded on the row still describing the bytes just hashed.
+            if self.db.set_fingerprint(
+                track_id, fingerprint, expect_size=size, expect_mtime=mtime
+            ):
+                recorded += 1
         if recorded:
             logger.info(
                 "recorded content fingerprints for %d existing track(s)", recorded
@@ -611,7 +631,7 @@ class Analyzer:
                     tags=result.tags,
                     library_root=lib_root,
                     relative_path=rel_path,
-                    fingerprint=_fingerprint_or_none(result.path, result.size),
+                    fingerprint=result.fingerprint,
                     style_activations=result.style_activations,
                     top_styles=result.top_styles,
                 )

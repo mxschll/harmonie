@@ -769,12 +769,31 @@ class Database:
         )
         return [dict(row) for row in cur]
 
-    def set_fingerprint(self, track_id: int, fingerprint: str) -> bool:
+    def set_fingerprint(
+        self,
+        track_id: int,
+        fingerprint: str,
+        *,
+        expect_size: int | None = None,
+        expect_mtime: float | None = None,
+    ) -> bool:
+        """Record a fingerprint, optionally only while the row still describes
+        the bytes that were hashed.
+
+        The guard matters because the file is read separately from the row: if
+        it changed in between, storing the hash would tie new content to the old
+        analysis.
+        """
+        sql = "UPDATE tracks SET fingerprint = ? WHERE id = ?"
+        params: list[object] = [fingerprint, track_id]
+        if expect_size is not None:
+            sql += " AND size = ?"
+            params.append(int(expect_size))
+        if expect_mtime is not None:
+            sql += " AND abs(mtime - ?) <= 1.0"
+            params.append(float(expect_mtime))
         with self.transaction() as cur:
-            cur.execute(
-                "UPDATE tracks SET fingerprint = ? WHERE id = ?",
-                (fingerprint, track_id),
-            )
+            cur.execute(sql, tuple(params))
             return cur.rowcount > 0
 
     def count_missing_fingerprints(self) -> int:

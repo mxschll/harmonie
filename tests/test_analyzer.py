@@ -378,6 +378,7 @@ class TestCancel:
                         path=j.path,
                         size=1,
                         mtime=1.0,
+                        fingerprint=None,
                         duration=1.0,
                         embedding=__import__("numpy").zeros(1280, dtype="float32"),
                         model="m",

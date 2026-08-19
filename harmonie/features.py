@@ -561,16 +561,18 @@ FINGERPRINT_CHUNK = 1 << 16
 
 
 def file_fingerprint(path: Path, size: int | None = None) -> str:
-    """Identify a file by its content rather than its location.
+    """Identify a file by sampling its content rather than by its location.
 
-    Hashes the size plus the first and last 64 KiB, which for audio files is
-    effectively unique: headers and tags differ even between tracks of identical
-    length. Reading the whole file would cost hours on a large library for no
-    practical gain, and two files that did collide would be byte-identical
-    anyway, so sharing an embedding between them is correct.
+    Hashes the size plus the first and last 64 KiB. Unlike mtime this survives
+    copying a library between systems, which is what lets a scan recognise a
+    track it has already analysed.
 
-    Unlike mtime this survives copying a library between systems, so it is what
-    tells a scan that a track it is looking at has already been analysed.
+    It samples rather than reads everything, so two files with the same size,
+    head and tail collide — a difference confined to the middle is invisible.
+    That is a deliberate trade: hashing a large library in full costs hours of
+    I/O per scan. Callers must treat a fingerprint shared by several rows as
+    identifying nothing and analyse instead, since the sample cannot say which
+    file is which.
     """
     import hashlib
     import os
@@ -581,9 +583,10 @@ def file_fingerprint(path: Path, size: int | None = None) -> str:
     h.update(str(size).encode())
     with open(path, "rb") as fh:
         h.update(fh.read(FINGERPRINT_CHUNK))
-        # Skip the tail read when the file is small enough that the head
-        # already covers it.
-        if size > 2 * FINGERPRINT_CHUNK:
-            fh.seek(-FINGERPRINT_CHUNK, os.SEEK_END)
+        # Anything past the head gets covered by the tail read. Requiring twice
+        # the chunk size here left files of 64-128 KiB hashed on their opening
+        # bytes alone.
+        if size > FINGERPRINT_CHUNK:
+            fh.seek(-min(FINGERPRINT_CHUNK, size), os.SEEK_END)
             h.update(fh.read(FINGERPRINT_CHUNK))
     return h.hexdigest()

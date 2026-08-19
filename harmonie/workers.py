@@ -16,6 +16,7 @@ from .features import (
     Descriptors,
     EffnetExtractor,
     TrackFeatures,
+    file_fingerprint,
     file_signature,
     prefetch_models,
     top_styles,
@@ -27,6 +28,14 @@ logger = logging.getLogger("harmonie.workers")
 # How often a scan collecting results looks up to check whether it was
 # cancelled. Short enough that shutdown feels immediate.
 RESULT_POLL_SEC = 0.5
+
+
+def _fingerprint_or_none(path: str, size: int) -> str | None:
+    """A file that vanished mid-scan is not worth failing the result for."""
+    try:
+        return file_fingerprint(Path(path), size)
+    except OSError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +64,9 @@ class FullResult:
     path: str
     size: int
     mtime: float
+    # Computed here rather than by the caller so it describes the same bytes
+    # the embedding was extracted from.
+    fingerprint: str | None
     embedding: np.ndarray
     duration: float
     model: str
@@ -142,6 +154,7 @@ def _do_full(job: FullJob) -> WorkerResult:
             path=job.path,
             size=job.size,
             mtime=job.mtime,
+            fingerprint=_fingerprint_or_none(job.path, job.size),
             embedding=feats.embedding,
             duration=feats.duration,
             model=feats.model,
