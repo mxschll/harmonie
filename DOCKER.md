@@ -103,8 +103,8 @@ data directory across.
 
 ## Switching from a native install
 
-Stop the native harmonie, so its write-ahead log is folded into the database
-file, then copy the database into the directory you mount at `/data`:
+Stop the native harmonie, then copy its database into the directory you mount at
+`/data`:
 
 ```bash
 cp ~/.local/share/harmonie/harmonie.db ./harmonie-data/
@@ -119,11 +119,10 @@ scan matches the existing analysis to it and reports `full=0`.
 
 The image is `linux/amd64` only and needs a CPU with AVX.
 
-Analysis comes from `essentia-tensorflow`, which publishes wheels for x86-64
-Linux and nothing else. There is no arm64 build, so ARM boards and NAS boxes can
-only run this image under emulation, which is too slow to scan with. The bundled
-TensorFlow is 2.5, built with AVX, so a CPU older than roughly 2011 fails at
-import with `Illegal instruction`.
+Analysis comes from `essentia-tensorflow`, which publishes x86-64 Linux wheels
+only. ARM boards and NAS boxes can run this image only under emulation, which is
+too slow to scan with. The bundled TensorFlow is 2.5, built with AVX, so a CPU
+older than roughly 2011 fails at import with `Illegal instruction`.
 
 AVX2 is not required: TensorFlow uses it when the CPU has it and falls back when
 it does not.
@@ -140,9 +139,9 @@ default uses every CPU the container may use, at roughly 1 GB of RAM each.
 
 ### GPUs
 
-The bundled TensorFlow is a GPU-capable build — it looks for `libcuda.so.1` at
-startup and logs the failure to load it — but the image ships no CUDA libraries,
-so analysis runs on the CPU.
+The bundled TensorFlow is a GPU-capable build and logs a failure to load
+`libcuda.so.1` at startup. The image ships no CUDA libraries, so analysis runs on
+the CPU.
 
 A GPU image would need a CUDA base matching TensorFlow 2.5 (CUDA 11.2 with cuDNN
 8.1), run with `--gpus all` and the NVIDIA Container Toolkit. That is untested
