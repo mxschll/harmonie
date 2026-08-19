@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import multiprocessing as mp
 import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Union
@@ -21,6 +23,7 @@ from .features import (
     prefetch_models,
     top_styles,
 )
+from .gpu import cuda_device_count
 from .tags import Tags, extract_tags
 
 logger = logging.getLogger("harmonie.workers")
@@ -28,6 +31,10 @@ logger = logging.getLogger("harmonie.workers")
 # How often a scan collecting results looks up to check whether it was
 # cancelled. Short enough that shutdown feels immediate.
 RESULT_POLL_SEC = 0.5
+
+# Long enough to load the model on a slow disk, short enough not to stall a
+# scan when a GPU wedges.
+GPU_PROBE_TIMEOUT_SEC = 180
 
 
 def _fingerprint_or_none(path: str, size: int) -> str | None:
@@ -115,6 +122,10 @@ def _worker_init(log_level: str = "INFO") -> None:
     """
     global _extractor
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+    # One worker per core, each its own process with its own TensorFlow: on a
+    # GPU host the first would otherwise reserve nearly all of its memory and
+    # the rest would fail. Ignored when there is no GPU.
+    os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
 
     # Spawn-mode workers don't inherit Python state from the parent, so
     # logging has to be configured here. Format constants are shared
@@ -195,6 +206,53 @@ def _dispatch(job: FullJob | DescriptorJob) -> WorkerResult:
 # ---------------------------------------------------------------------------
 
 
+def _gpu_usable() -> bool:
+    """Try one throwaway inference with the GPU visible.
+
+    TensorFlow treats a visible-but-unusable CUDA device as fatal: it aborts the
+    process rather than falling back, which would kill every analysis worker and
+    leave a scan making no progress. The probe therefore has to run somewhere
+    expendable — its own process.
+    """
+    code = (
+        "import numpy as np;"
+        "from harmonie.features import EffnetExtractor;"
+        "EffnetExtractor(load_genre_head=False)._model("
+        "np.zeros(16000 * 2, dtype='float32'))"
+    )
+    try:
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [sys.executable, "-c", code],
+            capture_output=True,
+            timeout=GPU_PROBE_TIMEOUT_SEC,
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        logger.debug("gpu probe could not run: %s", exc)
+        return False
+    return proc.returncode == 0
+
+
+def _configure_gpu() -> None:
+    """Use a visible CUDA device for inference, or make sure we do not try."""
+    devices = cuda_device_count()
+    if not devices:
+        return
+    if not _gpu_usable():
+        logger.warning(
+            "%d CUDA device(s) visible but TensorFlow cannot use them; "
+            "continuing on CPU",
+            devices,
+        )
+        # Workers inherit this, so they see no GPU and stay on the CPU path.
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        return
+    logger.info(
+        "%d CUDA device(s) visible; running inference on GPU (experimental). "
+        "Workers share the card, so keep HARMONIE_WORKERS low",
+        devices,
+    )
+
+
 class WorkerPool:
     """Wrapper around :class:`multiprocessing.Pool` that streams results
     back via ``imap_unordered``."""
@@ -216,6 +274,7 @@ class WorkerPool:
 
         # 'spawn' avoids fork-after-thread issues with TensorFlow.
         ctx = mp.get_context("spawn")
+        _configure_gpu()
         logger.info(
             "starting %d worker(s); each loads the models into memory, "
             "which takes a moment",
