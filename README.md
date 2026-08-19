@@ -31,9 +31,7 @@ MUSIC_DIR=/path/to/music docker compose up -d
 ```
 
 That serves on port 8842 and scans immediately. The image bundles the Essentia
-models, and a scanned database can be moved to another host — scan on a fast
-machine, serve on a slow one. See [DOCKER.md](DOCKER.md) for that workflow and
-the CPU requirements.
+models. See [DOCKER.md](DOCKER.md) for the CPU requirements.
 
 ### With pipx
 
