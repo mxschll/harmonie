@@ -159,10 +159,10 @@ In compose, add `gpus: all` to the service. A startup line reports what it found
 Workers share the card, so keep HARMONIE_WORKERS low
 ```
 
-Expect at most about 1.3x on a scan: decoding and the musical descriptors run on
-the CPU and account for roughly three quarters of the work. Every worker opens
-its own TensorFlow session on the same card, so raise `HARMONIE_WORKERS` with
-care.
+Only model inference moves to the GPU. Decoding, the mel spectrogram and the
+musical descriptors are Essentia's CPU code and about three quarters of the work,
+so expect at most 1.3x on a scan. Every worker opens its own TensorFlow session
+on the same card, so raise `HARMONIE_WORKERS` with care.
 
 Untested against real hardware. Set `CUDA_VISIBLE_DEVICES=` to force the CPU
 path. Embedded GPU code covers `sm_35` through `sm_86` plus `compute_86` PTX, so
