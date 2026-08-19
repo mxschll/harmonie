@@ -137,15 +137,36 @@ docker run --rm ghcr.io/mxschll/harmonie:latest python -c "import essentia.stand
 Scanning is parallel. `HARMONIE_WORKERS` sets how many cores to spend on it; the
 default uses every CPU the container may use, at roughly 1 GB of RAM each.
 
-### GPUs
+### GPUs (experimental)
 
-The bundled TensorFlow is a GPU-capable build and logs a failure to load
-`libcuda.so.1` at startup. The image ships no CUDA libraries, so analysis runs on
-the CPU.
+The bundled TensorFlow has CUDA statically linked; its only external CUDA
+dependency is the driver, `libcuda.so.1`. Install the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+and pass the card in:
 
-A GPU image would need a CUDA base matching TensorFlow 2.5 (CUDA 11.2 with cuDNN
-8.1), run with `--gpus all` and the NVIDIA Container Toolkit. That is untested
-here.
+```bash
+docker run -d --name harmonie --gpus all \
+  -p 8842:8842 \
+  -v ./harmonie-data:/data \
+  -v /path/to/music:/music:ro \
+  ghcr.io/mxschll/harmonie:latest
+```
+
+In compose, add `gpus: all` to the service. A startup line reports what it found:
+
+```
+1 CUDA device(s) visible; running inference on GPU (experimental).
+Workers share the card, so keep HARMONIE_WORKERS low
+```
+
+Expect at most about 1.3x on a scan: decoding and the musical descriptors run on
+the CPU and account for roughly three quarters of the work. Every worker opens
+its own TensorFlow session on the same card, so raise `HARMONIE_WORKERS` with
+care.
+
+Untested against real hardware. Set `CUDA_VISIBLE_DEVICES=` to force the CPU
+path. Embedded GPU code covers `sm_35` through `sm_86` plus `compute_86` PTX, so
+Ada and Hopper cards compile on first use.
 
 ## Notes
 
