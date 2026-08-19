@@ -1,0 +1,21 @@
+# The 450 MB database must never enter the build context.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+.venv/
+harmonie/.venv/
+**/__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+tests/
+docs/
+.env
+.github/
+
+# .git stays: setuptools-scm reads it to derive the version, and there is no
+# fallback_version to build without it. CI checks out with
+# persist-credentials: false so no token reaches the build context or its cache.

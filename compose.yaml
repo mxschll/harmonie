@@ -1,0 +1,38 @@
+services:
+  harmonie:
+    # Override to test a locally built image: HARMONIE_IMAGE=harmonie:local
+    image: ${HARMONIE_IMAGE:-ghcr.io/mxschll/harmonie:latest}
+    # Building locally instead of pulling: comment out `image` above and
+    # uncomment this.
+    # build: .
+    #
+    # essentia-tensorflow is x86-64 only. Naming the platform makes the
+    # failure explicit on an arm64 host instead of a confusing pull error.
+    platform: linux/amd64
+    container_name: harmonie
+    restart: unless-stopped
+    # tini as PID 1: forwards signals to harmonie and reaps exited workers.
+    init: true
+    # A scan in flight can take longer to wind down than Docker's default 10s.
+    stop_grace_period: 60s
+    ports:
+      # Loopback by default: the API takes no credentials unless
+      # HARMONIE_API_KEY is set. Set BIND_ADDRESS=0.0.0.0 to reach it from
+      # another machine, such as a Jellyfin host on the LAN.
+      - ${BIND_ADDRESS:-127.0.0.1}:8842:8842
+    volumes:
+      # The database and runtime state. This is the directory to back up.
+      - ./harmonie-data:/data
+      # Your library, on the host. The container reads it at /music, which is
+      # where its HARMONIE_LIBRARIES points.
+      - ${MUSIC_DIR:?set MUSIC_DIR to your music directory}:/music:ro
+    environment:
+      # Analysis workers. Unset or 0 uses every core.
+      HARMONIE_WORKERS: ${HARMONIE_WORKERS:-0}
+      # Rescan cadence. Set both to 0/false on a host that should only serve.
+      HARMONIE_SCAN_INTERVAL_HOURS: ${HARMONIE_SCAN_INTERVAL_HOURS:-24}
+      HARMONIE_SCAN_ON_STARTUP: ${HARMONIE_SCAN_ON_STARTUP:-true}
+      # Optional: require this key on every request except /health.
+      HARMONIE_API_KEY: ${HARMONIE_API_KEY:-}
+      HARMONIE_CORS_ORIGINS: ${HARMONIE_CORS_ORIGINS:-}
+      HARMONIE_LOG_LEVEL: ${HARMONIE_LOG_LEVEL:-INFO}

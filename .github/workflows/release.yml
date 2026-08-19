@@ -29,6 +29,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      # Empty when this push produced no release, which skips the image build.
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -118,3 +121,23 @@ jobs:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || steps.bump.outputs.new }}
           name: ${{ github.ref_type == 'tag' && github.ref_name || steps.bump.outputs.new }}
           generate_release_notes: true
+
+      # The released version, without the leading v, for the image build.
+      - name: Released version
+        id: version
+        if: github.ref_type == 'tag' || steps.decide.outputs.skip == 'false'
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || steps.bump.outputs.new }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  # Same tag-push problem as the GitHub release above: the bot's tag push does
+  # not trigger docker.yml, so call it here.
+  docker:
+    needs: release
+    if: needs.release.outputs.version != ''
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.release.outputs.version }}

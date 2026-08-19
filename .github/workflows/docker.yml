@@ -1,0 +1,85 @@
+name: docker
+
+# Publishes ghcr.io/mxschll/harmonie, so the compose file in DOCKER.md pulls a
+# working image instead of building one.
+#
+# release.yml calls this workflow after it creates a release: its tag push is
+# made with GITHUB_TOKEN, which does not trigger workflows, so a `push: tags:`
+# trigger alone would never fire for an automated release.
+#
+# Only linux/amd64 is built: essentia-tensorflow publishes no arm64 wheels.
+#
+# The package is private until its visibility is switched to public once, in
+# the repository's Packages settings.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version to publish, without the leading v.
+        required: true
+        type: string
+  push:
+    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+  workflow_dispatch:
+
+concurrency:
+  group: docker-${{ inputs.version || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+        with:
+          # setuptools-scm derives the package version from history.
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ inputs.version && format('refs/tags/v{0}', inputs.version) || github.ref }}
+          # The default leaves a token in .git/config, which the build context
+          # would carry into the exported layer cache.
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags
+        id: tags
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          if [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
+            echo "tags=$image:$version,$image:latest" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            echo "tags=$image:$version,$image:latest" >> "$GITHUB_OUTPUT"
+          else
+            version="$(git describe --tags --always | sed 's/^v//')"
+            echo "tags=$image:$version" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            SETUPTOOLS_SCM_PRETEND_VERSION=${{ steps.tags.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
