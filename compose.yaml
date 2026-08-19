@@ -16,7 +16,10 @@ services:
     # A scan in flight can take longer to wind down than Docker's default 10s.
     stop_grace_period: 60s
     ports:
-      - "8842:8842"
+      # Loopback by default: the API takes no credentials unless
+      # HARMONIE_API_KEY is set. Set BIND_ADDRESS=0.0.0.0 to reach it from
+      # another machine, such as a Jellyfin host on the LAN.
+      - ${BIND_ADDRESS:-127.0.0.1}:8842:8842
     volumes:
       # The database and runtime state. Copy this directory to move a scanned
       # library to another host — see DOCKER.md.
@@ -32,3 +35,5 @@ services:
       HARMONIE_SCAN_ON_STARTUP: ${HARMONIE_SCAN_ON_STARTUP:-true}
       # Optional: require this key on every request except /health.
       HARMONIE_API_KEY: ${HARMONIE_API_KEY:-}
+      HARMONIE_CORS_ORIGINS: ${HARMONIE_CORS_ORIGINS:-}
+      HARMONIE_LOG_LEVEL: ${HARMONIE_LOG_LEVEL:-INFO}

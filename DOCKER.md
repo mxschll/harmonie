@@ -32,9 +32,19 @@ Both paths are fixed inside the container:
 `MUSIC_DIR` is the host directory compose mounts at `/music`. The container's
 `HARMONIE_LIBRARIES` is already `/music` and is not read from `.env`.
 
-Configuration is otherwise the same `HARMONIE_*` environment set as a normal
-install, so `-e HARMONIE_WORKERS=4` or a `.env` file works as documented in the
-[README](README.md).
+Compose publishes the port on `127.0.0.1` only, because the API takes no
+credentials unless `HARMONIE_API_KEY` is set. To reach it from another machine,
+such as a Jellyfin host on the LAN:
+
+```
+BIND_ADDRESS=0.0.0.0
+```
+
+Compose forwards `HARMONIE_WORKERS`, `HARMONIE_SCAN_INTERVAL_HOURS`,
+`HARMONIE_SCAN_ON_STARTUP`, `HARMONIE_API_KEY`, `HARMONIE_CORS_ORIGINS` and
+`HARMONIE_LOG_LEVEL` from the environment or a `.env` file. Add any other
+`HARMONIE_*` setting from the [README](README.md) to the `environment:` block
+yourself.
 
 ## Moving the database to another host
 
