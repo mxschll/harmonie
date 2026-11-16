@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import multiprocessing as mp
 import os
 import subprocess
 import sys
+import threading
+import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Union
@@ -28,9 +32,14 @@ from .tags import Tags, extract_tags
 
 logger = logging.getLogger("harmonie.workers")
 
-# How often a scan collecting results looks up to check whether it was
-# cancelled. Short enough that shutdown feels immediate.
-RESULT_POLL_SEC = 0.5
+# How often the result loop wakes to harvest finished jobs, feed idle workers,
+# and notice a cancel or a timed-out job.
+RESULT_POLL_SEC = 0.1
+
+# How many jobs may be queued or running at once. Each worker keeps one job
+# waiting behind the one it is running, so a worker that finishes between
+# polls does not sit idle until the next poll.
+INFLIGHT_PER_WORKER = 2
 
 # Long enough to load the model on a slow disk, short enough not to stall a
 # scan when a GPU wedges.
@@ -112,15 +121,22 @@ WorkerResult = Union[FullResult, DescriptorResult, JobError]
 
 _extractor = None
 
+# Shared with the parent; see WorkerPool._spawn_pool. A worker sets slot i to 1
+# when it starts the job submitted with ticket i. Written with a plain store so
+# that a worker killed mid-job cannot leave a lock behind the way a
+# multiprocessing.Queue can.
+_started = None
 
-def _worker_init(log_level: str = "INFO") -> None:
+
+def _worker_init(log_level: str = "INFO", started=None) -> None:
     """Run once per worker process. Loads the extractor, configures logging,
     and (for non-DEBUG levels) silences Essentia's
     ``[WARNING] No network created, or last created network has been
     deleted`` line that fires when the standard-mode TF wrapper destroys
     its internal streaming network.
     """
-    global _extractor
+    global _extractor, _started
+    _started = started
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
     # One worker per core, each its own process with its own TensorFlow: on a
     # GPU host the first would otherwise reserve nearly all of its memory and
@@ -195,7 +211,9 @@ def _do_descriptors(job: DescriptorJob) -> WorkerResult:
         return JobError(path=job.path, error=repr(e))
 
 
-def _dispatch(job: FullJob | DescriptorJob) -> WorkerResult:
+def _dispatch(job: FullJob | DescriptorJob, ticket: int = -1) -> WorkerResult:
+    if _started is not None and 0 <= ticket < len(_started):
+        _started[ticket] = 1
     if isinstance(job, FullJob):
         return _do_full(job)
     return _do_descriptors(job)
@@ -254,8 +272,9 @@ def _configure_gpu() -> None:
 
 
 class WorkerPool:
-    """Wrapper around :class:`multiprocessing.Pool` that streams results
-    back via ``imap_unordered``."""
+    """Wrapper around :class:`multiprocessing.Pool` that streams results back
+    as workers finish and enforces a per-job timeout, so one file that wedges
+    the native decoder cannot stall the whole scan."""
 
     def __init__(
         self,
@@ -263,8 +282,13 @@ class WorkerPool:
         workers: int,
         log_level: str = "INFO",
         should_stop: Callable[[], bool] | None = None,
+        job_timeout: float | None = None,
     ) -> None:
         self.workers = max(1, workers)
+        self.job_timeout = job_timeout
+        self._log_level = log_level
+        self._lock = threading.Lock()
+        self._stopped = False
 
         # Fetch the models here, in the parent. Each worker builds its own
         # extractor, so leaving this to them means one download per worker
@@ -273,19 +297,51 @@ class WorkerPool:
         prefetch_models(should_stop)
 
         # 'spawn' avoids fork-after-thread issues with TensorFlow.
-        ctx = mp.get_context("spawn")
+        self._ctx = mp.get_context("spawn")
         _configure_gpu()
         logger.info(
             "starting %d worker(s); each loads the models into memory, "
             "which takes a moment",
             self.workers,
         )
-        self._pool: mp.pool.Pool | None = ctx.Pool(
+        self._started = self._new_started()
+        self._pool: mp.pool.Pool | None = self._spawn_pool()
+        logger.info("started worker pool: %d workers", self.workers)
+
+    def _new_started(self):
+        """One byte per in-flight ticket; see :func:`_dispatch`."""
+        return self._ctx.RawArray("b", INFLIGHT_PER_WORKER * self.workers)
+
+    def _spawn_pool(self) -> mp.pool.Pool:
+        return self._ctx.Pool(
             processes=self.workers,
             initializer=_worker_init,
-            initargs=(log_level,),
+            initargs=(self._log_level, self._started),
         )
-        logger.info("started worker pool: %d workers", self.workers)
+
+    def _restart_pool(self) -> bool:
+        """Replace the pool after a worker wedged. terminate() takes the whole
+        pool down, since a single worker cannot be killed on its own.
+
+        Returns False if the pool was stopped meanwhile, in which case the
+        replacement is torn down again rather than left running unowned.
+        """
+        with self._lock:
+            old, self._pool = self._pool, None
+        if old is not None:
+            with contextlib.suppress(Exception):
+                old.terminate()
+                old.join()
+        self._started = self._new_started()
+        fresh = self._spawn_pool()
+        with self._lock:
+            if not self._stopped:
+                self._pool = fresh
+                return True
+        with contextlib.suppress(Exception):
+            fresh.terminate()
+            fresh.join()
+        return False
 
     def map(
         self,
@@ -295,9 +351,20 @@ class WorkerPool:
     ):
         """Stream results as workers finish, one job per task.
 
-        There is deliberately no chunksize option: batching makes
-        ``imap_unordered`` return a plain generator with no ``next(timeout=...)``,
-        and the timeout is what lets a cancelled scan stop collecting.
+        At most ``INFLIGHT_PER_WORKER * workers`` jobs are submitted at a
+        time. Each gets a ticket, and the worker flags the ticket's slot in
+        ``_started`` when it picks the job up, so the timeout clock runs only
+        while the job is actually executing: time spent queued behind another
+        job, or waiting for a worker to finish loading its models, does not
+        count.
+
+        A job that runs past :attr:`job_timeout` is reported as a
+        :class:`JobError`, the pool is torn down to kill the worker stuck in
+        native code, and every other job that was in flight is requeued onto
+        a fresh pool.
+
+        There is deliberately no chunksize option: one job per task is what
+        lets a single bad file be pinned to a single result and timed out.
         """
         if self._pool is None:
             raise RuntimeError("pool is closed")
@@ -305,37 +372,109 @@ class WorkerPool:
         # library into a pool the scan has already abandoned.
         if should_stop is not None and should_stop():
             return
-        pending = self._pool.imap_unordered(_dispatch, jobs, chunksize=1)
-        while True:
-            if self._pool is None or (should_stop is not None and should_stop()):
-                return
-            try:
-                # Poll instead of blocking. terminate() called from another
-                # thread does not make a blocked next() raise: it waits for a
-                # result no worker will ever send, so the scan would never
-                # notice the cancel and the process could not shut down.
-                yield pending.next(timeout=RESULT_POLL_SEC)
-            except mp.TimeoutError:
-                continue
-            except StopIteration:
+
+        pending = deque(jobs)
+        inflight: dict[int, tuple[mp.pool.AsyncResult, FullJob | DescriptorJob]] = {}
+        started_at: dict[int, float] = {}
+
+        while pending or inflight:
+            pool = self._pool
+            if pool is None or (should_stop is not None and should_stop()):
                 return
 
+            while pending and len(inflight) < len(self._started):
+                ticket = next(t for t in range(len(self._started)) if t not in inflight)
+                job = pending.popleft()
+                self._started[ticket] = 0
+                inflight[ticket] = (pool.apply_async(_dispatch, (job, ticket)), job)
+
+            now = time.monotonic()
+            for ticket in inflight:
+                if ticket not in started_at and self._started[ticket]:
+                    started_at[ticket] = now
+
+            finished = [t for t, (ar, _) in inflight.items() if ar.ready()]
+            for ticket in finished:
+                ar, job = inflight.pop(ticket)
+                started_at.pop(ticket, None)
+                yield self._collect(ar, job)
+
+            if self.job_timeout is not None:
+                overran = [
+                    t
+                    for t, started in started_at.items()
+                    if t in inflight and now - started > self.job_timeout
+                ]
+                if overran:
+                    yield from self._recover(overran, inflight, started_at, pending)
+                    if should_stop is not None and should_stop():
+                        return
+                    if not self._restart_pool():
+                        return
+                    continue
+
+            if not finished:
+                time.sleep(RESULT_POLL_SEC)
+
+    @staticmethod
+    def _collect(ar, job) -> WorkerResult:
+        try:
+            return ar.get()
+        except Exception as exc:
+            # _do_full/_do_descriptors return JobError on failure, so this is
+            # a result the worker could not pickle, or an error outside their
+            # try (e.g. the extractor never loaded).
+            return JobError(path=job.path, error=repr(exc))
+
+    def _recover(self, overran, inflight, started_at, pending):
+        """Fail the overran jobs, harvest whatever else already finished, and
+        requeue the rest. The pool is dead after this; the caller restarts it."""
+        secs = f"{self.job_timeout:g}"
+        for ticket in overran:
+            _, job = inflight.pop(ticket)
+            started_at.pop(ticket, None)
+            logger.warning(
+                "extraction exceeded %ss timeout, terminating worker: %s",
+                secs,
+                job.path,
+            )
+            yield JobError(
+                path=job.path,
+                error=f"extraction exceeded {secs}s timeout and was terminated",
+            )
+        # Yielding above let the consumer run; jobs may have finished since.
+        requeue = []
+        for ar, job in inflight.values():
+            if ar.ready():
+                yield self._collect(ar, job)
+            else:
+                requeue.append(job)
+        inflight.clear()
+        started_at.clear()
+        if requeue:
+            logger.info("requeueing %d job(s) interrupted by the restart", len(requeue))
+            pending.extendleft(reversed(requeue))
+
     def close(self) -> None:
-        if self._pool is None:
+        with self._lock:
+            self._stopped = True
+            pool, self._pool = self._pool, None
+        if pool is None:
             return
-        self._pool.close()
-        self._pool.join()
-        self._pool = None
+        pool.close()
+        pool.join()
 
     def terminate(self) -> None:
         """Hard-stop all workers (SIGTERM). Use when the user has asked
         to abort: ``close()`` would otherwise wait for in-flight kernel
         I/O (slow CIFS reads, etc.) to finish."""
-        if self._pool is None:
+        with self._lock:
+            self._stopped = True
+            pool, self._pool = self._pool, None
+        if pool is None:
             return
-        self._pool.terminate()
-        self._pool.join()
-        self._pool = None
+        pool.terminate()
+        pool.join()
 
 
 # ---------------------------------------------------------------------------

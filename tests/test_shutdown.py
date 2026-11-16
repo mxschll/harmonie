@@ -47,35 +47,47 @@ def test_a_blocking_consumer_hangs_after_terminate():
     assert not finished.is_set()
 
 
-class _StuckIterator:
-    """Stands in for an IMapIterator whose results never arrive."""
-
+class _PollCounter:
     def __init__(self) -> None:
         self.polls = 0
 
-    def next(self, timeout=None):
-        self.polls += 1
-        raise mp.TimeoutError
+
+class _NeverReady:
+    """Stands in for an AsyncResult whose worker never returns."""
+
+    def __init__(self, counter: _PollCounter) -> None:
+        self._counter = counter
+
+    def ready(self) -> bool:
+        self._counter.polls += 1
+        return False
+
+    def get(self, timeout=None):  # pragma: no cover - never ready
+        raise AssertionError("get() must not be called on a never-ready result")
 
 
 class _StubPool:
-    def __init__(self, iterator: _StuckIterator) -> None:
-        self._iterator = iterator
+    def __init__(self, counter: _PollCounter) -> None:
+        self._counter = counter
 
-    def imap_unordered(self, func, jobs, chunksize=1):
-        return self._iterator
+    def apply_async(self, func, args):
+        return _NeverReady(self._counter)
 
 
-def _pool_with(iterator: _StuckIterator) -> WorkerPool:
+def _pool_with(counter: _PollCounter) -> WorkerPool:
     pool = WorkerPool.__new__(WorkerPool)  # no models, no subprocesses
     pool.workers = 2
-    pool._pool = _StubPool(iterator)
+    pool.job_timeout = None
+    pool._lock = threading.Lock()
+    pool._stopped = False
+    pool._started = bytearray(4)
+    pool._pool = _StubPool(counter)
     return pool
 
 
 def test_map_returns_when_the_scan_is_cancelled():
-    iterator = _StuckIterator()
-    pool = _pool_with(iterator)
+    counter = _PollCounter()
+    pool = _pool_with(counter)
     cancelled = threading.Event()
     exited = threading.Event()
 
@@ -88,7 +100,7 @@ def test_map_returns_when_the_scan_is_cancelled():
     t.start()
     time.sleep(1)
     assert not exited.is_set()
-    assert iterator.polls > 0, "map() should be polling, not blocking"
+    assert counter.polls > 0, "map() should be polling, not blocking"
 
     cancelled.set()
     t.join(timeout=5)
@@ -96,8 +108,8 @@ def test_map_returns_when_the_scan_is_cancelled():
 
 
 def test_map_returns_when_the_pool_is_terminated_underneath_it():
-    iterator = _StuckIterator()
-    pool = _pool_with(iterator)
+    counter = _PollCounter()
+    pool = _pool_with(counter)
     exited = threading.Event()
 
     def consume():

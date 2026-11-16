@@ -23,7 +23,9 @@ env:
 jobs:
   pytest:
     name: pytest
-    runs-on: ubuntu-latest
+    # setup-python has no 3.9 build for the Ubuntu 26.04 image that
+    # ubuntu-latest resolves to, so this job pins the previous image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 

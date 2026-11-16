@@ -111,6 +111,15 @@ class Settings(BaseSettings):
 
     # Analysis -----------------------------------------------------------
     workers: int = Field(default=0, description="0 = use CPU count.")
+    job_timeout_sec: float = Field(
+        default=300.0,
+        ge=0,
+        description=(
+            "Kill and replace a worker if a single file takes longer than this "
+            "to analyze, and record it as failed. Guards against files that "
+            "wedge the native decoder in an endless loop. 0 disables."
+        ),
+    )
 
     # Scheduling ---------------------------------------------------------
     scan_interval_hours: float = Field(default=24.0, ge=0)
@@ -167,6 +176,11 @@ class Settings(BaseSettings):
         if self.workers > 0:
             return self.workers
         return available_cpus()
+
+    @property
+    def job_timeout(self) -> float | None:
+        """Per-file analysis timeout in seconds, or None when disabled."""
+        return self.job_timeout_sec if self.job_timeout_sec > 0 else None
 
 
 _settings: Settings | None = None

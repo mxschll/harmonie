@@ -45,3 +45,23 @@ def test_settings_explicit_constructor_arg_wins(tmp_path, monkeypatch):
     monkeypatch.setenv("HARMONIE_DATA_DIR", "/tmp/should-not-be-used")
     s = Settings(data_dir=tmp_path)
     assert s.data_dir == tmp_path
+
+
+def test_job_timeout_zero_disables(monkeypatch):
+    from harmonie.config import Settings
+
+    assert Settings(job_timeout_sec=0).job_timeout is None
+    assert Settings(job_timeout_sec=45).job_timeout == 45.0
+    assert Settings().job_timeout == 300.0
+
+    monkeypatch.setenv("HARMONIE_JOB_TIMEOUT_SEC", "0")
+    assert Settings().job_timeout is None
+
+
+def test_job_timeout_rejects_negative():
+    import pytest
+
+    from harmonie.config import Settings
+
+    with pytest.raises(ValueError):
+        Settings(job_timeout_sec=-1)
