@@ -18,6 +18,9 @@ class _StubContext:
     def Pool(self, **kwargs):  # noqa: N802 - mirrors multiprocessing's name
         return object()
 
+    def RawArray(self, typecode, size):  # noqa: N802 - mirrors multiprocessing's name
+        return bytearray(size)
+
 
 class _FakeDriver:
     def __init__(self, count: int, init_rc: int = 0, count_rc: int = 0) -> None:

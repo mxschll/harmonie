@@ -328,6 +328,48 @@ def test_crashed_scan_persists_state_and_error(tmp_path, monkeypatch):
         analyzer.stop()
 
 
+def test_crashed_scan_drops_its_pool_so_the_next_scan_rebuilds(tmp_path, monkeypatch):
+    """A pool whose restart failed is unusable. Keeping it would make every
+    later scan die on the same dead pool."""
+    lib = tmp_path / "library"
+    lib.mkdir()
+    analyzer = Analyzer(Settings(libraries=[lib], data_dir=tmp_path))
+
+    class DeadPool:
+        terminated = False
+
+        def map(self, jobs, *, should_stop=None):
+            raise RuntimeError("could not spawn workers")
+
+        def terminate(self):
+            self.terminated = True
+
+        def close(self):
+            pass
+
+    dead = DeadPool()
+    analyzer.pool = dead
+    monkeypatch.setattr(
+        analyzer_mod, "iter_audio_files", lambda roots: iter([Path("/lib/a.flac")])
+    )
+    monkeypatch.setattr(
+        analyzer_mod,
+        "build_jobs",
+        lambda db, files, **kw: (
+            [FullJob(path="/lib/a.flac", size=1, mtime=1.0)],
+            [],
+            0,
+        ),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="could not spawn"):
+            analyzer.scan()
+        assert analyzer.pool is None
+        assert dead.terminated is True
+    finally:
+        analyzer.stop()
+
+
 # ---------------------------------------------------------------------------
 # Cancellation
 # ---------------------------------------------------------------------------

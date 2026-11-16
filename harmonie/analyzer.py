@@ -260,6 +260,7 @@ class Analyzer:
                 workers=self.settings.worker_count,
                 log_level=self.settings.log_level,
                 should_stop=self._cancel_event.is_set,
+                job_timeout=self.settings.job_timeout,
             )
         except DownloadCancelled as exc:
             # Cancelled while fetching models on a first run.
@@ -518,6 +519,13 @@ class Analyzer:
             scan_last_error = repr(exc)
             self.status.last_error = scan_last_error
             logger.exception("scan crashed")
+            # The pool may be what failed (a restart that could not spawn
+            # workers, say). Drop it so the next scan builds a fresh one
+            # instead of failing on the same dead pool every time.
+            pool, self.pool = self.pool, None
+            if pool is not None:
+                with contextlib.suppress(Exception):
+                    pool.terminate()
             raise
         finally:
             elapsed = time.monotonic() - t0
