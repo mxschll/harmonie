@@ -587,6 +587,12 @@ class EffnetExtractor:
             quality=4,
         )(audio_44k)
         emb_frames = self._model(audio_16k)
+        # The model returns an empty list, not an array, for audio shorter
+        # than one of its analysis windows.
+        if len(emb_frames) == 0:
+            raise ValueError(
+                f"audio too short for the embedding model ({duration:.2f}s): {path}"
+            )
         if emb_frames.ndim != 2 or emb_frames.shape[1] != EFFNET_EMBEDDING_DIM:
             raise ValueError(f"unexpected embedding shape {emb_frames.shape}")
         emb = emb_frames.mean(axis=0).astype(np.float32, copy=False)

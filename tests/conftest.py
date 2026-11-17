@@ -18,6 +18,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--docker-image",
+        default=None,
+        metavar="IMAGE",
+        help="Run tests/test_docker.py against this built image, e.g. harmonie:dev.",
+    )
+
+
 @pytest.fixture
 def tmp_db_path(tmp_path: Path) -> Path:
     return tmp_path / "test.db"

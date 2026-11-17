@@ -94,7 +94,18 @@ pip install --pre -e ".[dev]"
 pytest
 ```
 
-The non-Essentia parts (DB, similarity, playlist, scan, tags, API) are covered by the `tests/` suite. Essentia itself is exercised by running an actual scan against a small fixture library.
+The non-Essentia parts (DB, similarity, playlist, scan, tags, API) are covered by the `tests/` suite. Decoding (`tests/test_decode.py`) runs against real files generated with PyAV. Essentia itself is exercised by the Docker tests below, and by running a scan against a small fixture library.
+
+### Docker tests
+
+`tests/test_docker.py` builds nothing itself; it runs a built image through a one-shot scan, the service with its startup scan and API, and the `HEALTHCHECK`. It is skipped unless `--docker-image` names an image, so plain `pytest` is unaffected. CI runs it on every pull request (`.github/workflows/docker-test.yml`).
+
+```bash
+docker build -t harmonie:dev .
+pytest tests/test_docker.py -v --docker-image harmonie:dev
+```
+
+The image is linux/amd64 only. On an Apple Silicon Mac it runs under emulation and the model load is slow; on colima or Docker Desktop the pytest temp dir may also not be shared with the VM, in which case pass `--basetemp ~/tmp`.
 
 ### Snapshot tests for playlists
 
