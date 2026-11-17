@@ -43,7 +43,25 @@ PY
 RUN find /opt/harmonie/cache -name '*.lock' -delete
 
 # Fail the build rather than the first scan if the native stack is broken.
-RUN python -c "import essentia.standard, harmonie; print('essentia ok')"
+# Decoding after importing essentia checks that its bundled FFmpeg and PyAV's
+# coexist in one process.
+RUN <<'PY' python -
+import wave
+from pathlib import Path
+
+import essentia.standard  # noqa: F401
+from harmonie.features import decode_mono
+
+p = Path("/tmp/probe.wav")
+with wave.open(str(p), "wb") as w:
+    w.setnchannels(2)
+    w.setsampwidth(2)
+    w.setframerate(44100)
+    w.writeframes(bytes(4 * 4410))
+audio, rate = decode_mono(p)
+assert rate == 44100 and audio.size == 4410, (rate, audio.size)
+print("native stack ok")
+PY
 
 
 FROM python:3.12-slim

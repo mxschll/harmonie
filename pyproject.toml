@@ -15,6 +15,10 @@ requires-python = ">=3.9,<3.13"
 dependencies = [
     "numpy>=1.23",
     "essentia-tensorflow",
+    # Audio decoding (features.decode_mono). 15.x is the first line with
+    # FFmpeg 7 wheels and the last with Python 3.9 wheels; pip picks the
+    # newest the interpreter supports.
+    "av>=15",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "pydantic>=2.6",
