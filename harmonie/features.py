@@ -8,7 +8,8 @@ For one audio file, :class:`EffnetExtractor` produces:
   head running on top of the Effnet embeddings.
 
 Backed by ``essentia-tensorflow`` (the Discogs-Effnet model + classical
-descriptor algorithms run on the same decoded audio).
+descriptor algorithms run on the same decoded audio). Decoding itself goes
+through PyAV; see :func:`decode_mono`.
 
 Two extraction modes:
 
@@ -395,6 +396,101 @@ def compute_descriptors(audio: np.ndarray) -> Descriptors:
 
 
 # ---------------------------------------------------------------------------
+# Decoding
+# ---------------------------------------------------------------------------
+
+
+def decode_mono(path: Path) -> tuple[np.ndarray, int]:
+    """Decode an audio file to mono float32 at its native sample rate.
+
+    Returns ``(samples, sample_rate)``. Stereo is mixed as ``(L + R) / 2``,
+    and files with more than two channels are rejected, both as Essentia's
+    ``MonoLoader`` did. Packets the decoder rejects are skipped, as
+    ``MonoLoader`` also did, so a file with a damaged stretch still yields the
+    rest of its audio. A file whose sample rate or channel layout changes
+    partway through is rejected: it is spliced from different sources and
+    there is no right answer for what its audio is.
+
+    Decoding goes through PyAV rather than Essentia's loader because the
+    FFmpeg that the essentia wheels bundle is 2.8 (2015), whose FLAC parser
+    loops forever on exactly those spliced files. PyAV ships a current FFmpeg.
+    """
+    import av
+
+    with av.open(os.path.abspath(path)) as container:
+        if not container.streams.audio:
+            raise ValueError(f"no audio stream: {path}")
+        stream = container.streams.audio[0]
+        # Planar float keeps one row per channel whatever the source format,
+        # so one mean() does the downmix.
+        to_planar = av.AudioResampler(format="fltp")
+        out = _MonoBuffer(_estimated_samples(stream))
+        rate: int | None = None
+        layout: str | None = None
+        bad_packets = 0
+        for packet in container.demux(stream):
+            try:
+                frames = packet.decode()
+            except av.error.InvalidDataError:
+                bad_packets += 1
+                continue
+            for frame in frames:
+                if rate is None:
+                    rate = frame.sample_rate
+                    layout = frame.layout.name
+                    if frame.layout.nb_channels > 2:
+                        raise ValueError(
+                            f"{frame.layout.nb_channels} channels, more than 2: {path}"
+                        )
+                elif frame.sample_rate != rate or frame.layout.name != layout:
+                    raise ValueError(
+                        f"stream parameters change mid-file "
+                        f"({rate} Hz {layout} -> {frame.sample_rate} Hz "
+                        f"{frame.layout.name}): {path}"
+                    )
+                for converted in to_planar.resample(frame):
+                    out.append(converted.to_ndarray().mean(axis=0, dtype=np.float32))
+        for converted in to_planar.resample(None):
+            out.append(converted.to_ndarray().mean(axis=0, dtype=np.float32))
+    if bad_packets:
+        logger.warning("skipped %d undecodable packet(s) in %s", bad_packets, path)
+    if rate is None:
+        rate = stream.rate or 0
+        if rate <= 0:
+            raise ValueError(f"no decodable audio: {path}")
+    return out.finish(), rate
+
+
+def _estimated_samples(stream) -> int:
+    """Sample count from the container's duration, or 0 if it has none."""
+    if stream.duration is None or stream.time_base is None or not stream.rate:
+        return 0
+    return int(stream.duration * stream.time_base * stream.rate)
+
+
+class _MonoBuffer:
+    """Grows a float32 array in place. Preallocating from the container's
+    duration avoids holding every decoded chunk plus a concatenated copy,
+    which would double peak memory on long files."""
+
+    def __init__(self, expected: int) -> None:
+        self._buf = np.empty(max(expected, 0), dtype=np.float32)
+        self._n = 0
+
+    def append(self, samples: np.ndarray) -> None:
+        end = self._n + samples.size
+        if end > self._buf.size:
+            grown = np.empty(max(end, 2 * self._buf.size, 1 << 16), dtype=np.float32)
+            grown[: self._n] = self._buf[: self._n]
+            self._buf = grown
+        self._buf[self._n : end] = samples
+        self._n = end
+
+    def finish(self) -> np.ndarray:
+        return self._buf[: self._n]
+
+
+# ---------------------------------------------------------------------------
 # Backend: Discogs-Effnet
 # ---------------------------------------------------------------------------
 
@@ -420,7 +516,6 @@ class EffnetExtractor:
     ) -> None:
         try:
             from essentia.standard import (
-                MonoLoader,
                 Resample,
                 TensorflowPredictEffnetDiscogs,
             )
@@ -430,7 +525,6 @@ class EffnetExtractor:
                 "Install with: pip install essentia-tensorflow"
             ) from e
 
-        self._MonoLoader = MonoLoader
         self._Resample = Resample
         if model_path is None:
             model_path = ensure_effnet_model()
@@ -469,13 +563,17 @@ class EffnetExtractor:
         return self._genre_labels
 
     def _load_44k(self, path: Path) -> np.ndarray:
-        audio = self._MonoLoader(
-            filename=str(path),
-            sampleRate=DESCRIPTOR_SAMPLE_RATE,
-            resampleQuality=4,
-        )()
+        audio, rate = decode_mono(path)
         if audio.size == 0:
             raise ValueError(f"empty audio: {path}")
+        if rate != DESCRIPTOR_SAMPLE_RATE:
+            # Same resampler and quality MonoLoader used, so files analysed
+            # before the decoder change produce the same audio.
+            audio = self._Resample(
+                inputSampleRate=rate,
+                outputSampleRate=DESCRIPTOR_SAMPLE_RATE,
+                quality=4,
+            )(audio)
         return audio
 
     def extract(self, path: Path) -> TrackFeatures:

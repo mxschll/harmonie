@@ -4,7 +4,7 @@
 [![Tests (Python 3.11)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/tests-py311.yml)
 [![Lint](https://github.com/mxschll/harmonie/actions/workflows/lint.yml/badge.svg)](https://github.com/mxschll/harmonie/actions/workflows/lint.yml)
 
-Harmonie provides audio similarity and playlist generation for local music libraries. It analyzes each track with [Essentia](https://essentia.upf.edu/) to produce an audio embedding, musical descriptors, and probabilities for [400 Discogs styles](https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json). [Mutagen](https://mutagen.readthedocs.io/) reads artist, album, title, and track-number tags.
+Harmonie provides audio similarity and playlist generation for local music libraries. It analyzes each track with [Essentia](https://essentia.upf.edu/) to produce an audio embedding, musical descriptors, and probabilities for [400 Discogs styles](https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json). Audio is decoded with [PyAV](https://pyav.org/) (FFmpeg); [Mutagen](https://mutagen.readthedocs.io/) reads artist, album, title, and track-number tags.
 
 Results are stored in SQLite and exposed through an HTTP API for similarity search, filtered track listings, and playlist generation. Harmonie is the analysis service used by the [Jellyfin Harmonie plugin](https://github.com/mxschll/jellyfin-harmonie).
 
