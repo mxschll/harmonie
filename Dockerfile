@@ -11,9 +11,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
-ARG SETUPTOOLS_SCM_PRETEND_VERSION
-ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
-
 # --pre is required: essentia-tensorflow only publishes development releases.
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -22,12 +19,22 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 RUN python -m venv "$VIRTUAL_ENV"
 
 WORKDIR /src
-COPY . /src
-RUN pip install --pre .
 
-# Bake the Essentia models into the image so a container needs no network on
-# first run. prefetch_models() is harmonie's own fetch path, retries included,
-# so the build cannot drift from what the analyzer looks for at runtime.
+# Dependencies first, from the project metadata plus an empty package, so
+# this layer (essentia's 600 MB wheel included) survives source changes. The
+# version is pinned to a constant here: a real one would differ per release
+# and invalidate this layer and the model layer below.
+COPY pyproject.toml README.md /src/
+COPY harmonie/__init__.py /src/harmonie/
+RUN SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install --pre .
+
+# Bake the models in so a container needs no network on first run. They get
+# their own layer, keyed on features.py alone, because the host is a
+# university server that is not always reachable; with the layer cached a
+# code change no longer depends on it. prefetch_models() is harmonie's own
+# fetch path, retries included, so the build cannot drift from what the
+# analyzer looks for at runtime.
+COPY harmonie/features.py /src/harmonie/
 ENV XDG_CACHE_HOME=/opt/harmonie/cache \
     TQDM_DISABLE=1
 RUN <<'PY' python -
@@ -41,6 +48,11 @@ PY
 
 # The lock files are download coordination, not payload.
 RUN find /opt/harmonie/cache -name '*.lock' -delete
+
+ARG SETUPTOOLS_SCM_PRETEND_VERSION
+ENV SETUPTOOLS_SCM_PRETEND_VERSION=${SETUPTOOLS_SCM_PRETEND_VERSION}
+COPY . /src
+RUN pip install --pre --no-deps .
 
 # Fail the build rather than the first scan if the native stack is broken.
 # Decoding after importing essentia checks that its bundled FFmpeg and PyAV's

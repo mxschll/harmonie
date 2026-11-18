@@ -10,12 +10,17 @@ harmonie/.venv/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+# setuptools copies into build/lib without clearing it, so a stale local
+# build/ could carry a deleted module into the image.
+build/
+dist/
 
 tests/
 docs/
 .env
 .github/
 
-# .git stays: setuptools-scm reads it to derive the version, and there is no
-# fallback_version to build without it. CI checks out with
+# .git stays: setuptools-scm reads it to derive the version for the final
+# install. Without it the version falls back to 0.0.0, which is what the
+# dependency layer deliberately builds with. CI checks out with
 # persist-credentials: false so no token reaches the build context or its cache.
